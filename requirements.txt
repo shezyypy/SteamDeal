@@ -1,7 +1,5 @@
 aiogram
 selenium
 beautifulsoup4
-json
-time
 requests
-re
+
