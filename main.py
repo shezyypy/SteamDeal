@@ -20,9 +20,6 @@ callback_data = CallbackDataFilter("callback_type", "callback_value")
 check = 0
 n = []
 
-with open('all_users.json', encoding='utf-8') as file:
-    Data = json.load(file)
-
 with open('all_sales.json', encoding='utf-8') as file:
     Data2 = json.load(file)
 
