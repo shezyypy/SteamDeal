@@ -1,2 +1,6 @@
 token = '6219359735:AAFzvFxSTsIo55P8xAvLqM4HYWUx5nXCJ0g'
 admin_id = '1127824573'
+host = '127.0.0.1'
+user = 'postgres'
+password = 'Oleg1101'
+db_name = 'user_db'
