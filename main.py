@@ -7,6 +7,9 @@ from auth_data import token, admin_id
 from Class import UserStates, UserPhoto, GameCheck, DeleteGame
 from InlinekeyboardButtons import ikb, PhotoIkb, BaseIkb, AskIkb, PhotoBackIkb
 from date_parser import get_date
+from DBAdd import add_to_db
+from DBCheckGames import check_user_games
+from DBDelete import delete_from_db
 
 import json
 
@@ -15,11 +18,7 @@ dp = Dispatcher(bot, storage=MemoryStorage())
 callback_data = CallbackDataFilter("callback_type", "callback_value")
 
 check = 0
-null = 0
-game_base = []
 n = []
-user_game_base = []
-len_list = 0
 
 with open('all_users.json', encoding='utf-8') as file:
     Data = json.load(file)
@@ -146,30 +145,44 @@ async def name_handler(message: types.Message, state: FSMContext):
     async with state.proxy() as data:
         data['name'] = message.text
         user_game = data.get('name')
-        n.append(user_game)
 
     for name in Data2:
-        if name.get("full_name") == user_game:
+        if name.get("full_name").lower() == user_game.lower():
             check = 1
+            user_game = name.get("full_name")
             price = name.get("price_orig")
             discount = name.get("sale")
             sale = name.get("price_sale")
             link = name.get("link")
+            n.append(user_game)
 
             break
         else:
             check = 0
 
     if check == 1:
-        await bot.send_message(message.from_user.id,
-                               text=f'<a href="{link}">{user_game}</a> уже находится на распродаже!🔥\nЕе изначальная '
-                                    f'стоимость составляла <s>{price}</s>, а с '
-                                    f'учетом скидки в размере {discount}, '
-                                    f'ее стоимость составляет <i>{sale}</i>.📉 Скидка будет действовать до '
-                                    f'{get_date(link)} ⏳\nВы хотите добавить ее в свой список '
-                                    f'отслеживания?', reply_markup=BaseIkb
-                               )
-        await state.finish()
+        try:
+            await bot.send_message(message.from_user.id,
+                                   text=f'<a href="{link}">{user_game}</a> уже находится на распродаже!🔥\nЕе '
+                                        f'изначальная'
+                                        f'стоимость составляла <s>{price}</s>, а с '
+                                        f'учетом скидки в размере {discount}, '
+                                        f'ее стоимость составляет <i>{sale}</i>.📉 Скидка будет действовать до '
+                                        f'{get_date(link)} ⏳\nВы хотите добавить ее в свой список '
+                                        f'отслеживания?', reply_markup=BaseIkb
+                                   )
+        except AttributeError:
+            await bot.send_message(message.from_user.id,
+                                   text=f'<a href="{link}">{user_game}</a> уже находится на распродаже!🔥\nЕе '
+                                        f'изначальная'
+                                        f'стоимость составляла <s>{price}</s>, а с '
+                                        f'учетом скидки в размере {discount}, '
+                                        f'ее стоимость составляет <i>{sale}</i>.\nВы хотите добавить ее в свой список '
+                                        f'отслеживания?', reply_markup=BaseIkb
+                                   )
+        finally:
+            await state.finish()
+
     elif check == 0:
         await bot.send_message(message.from_user.id, text="К сожалению интересующая вас игра находится вне раздела "
                                                           "скидок. 😓 Вы хотите ее добавить в свой список "
@@ -187,17 +200,15 @@ async def back_base(callback_query: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query_handler(lambda query: query.data == "base_yes")
 async def add_to_base(callback_query: types.CallbackQuery):
-    for user in Data:
-        if user.get("id") == callback_query.from_user.id and user.get("game") == n[0]:
+    for game in check_user_games(callback_query.from_user.id):
+        if n[0] == game:
             await bot.delete_message(callback_query.from_user.id, callback_query.message.message_id)
             await bot.send_message(callback_query.from_user.id, text="Вы уже добавили игру с таким названием, "
                                                                      "вы точно хотите ее добавить еще раз?",
                                    reply_markup=AskIkb)
             break
         else:
-            Data.append({'id': callback_query.from_user.id, 'game': n[0]})
-            with open("all_users.json", "w", encoding="utf-8") as file1:
-                json.dump(Data, file1, indent=4, ensure_ascii=False)
+            add_to_db(callback_query.from_user.id, n[0])
             n.clear()
             await bot.delete_message(callback_query.from_user.id, callback_query.message.message_id)
             await bot.send_message(callback_query.from_user.id,
@@ -217,16 +228,13 @@ async def delete_from_base(callback_query: types.CallbackQuery):
 
 @dp.callback_query_handler(lambda query: query.data == "ask_yes")
 async def check_user_game_yes(callback_query: types.CallbackQuery):
-    Data.append({'id': callback_query.from_user.id, 'game': n[0]})
-    with open("all_users.json", "w", encoding="utf-8") as file1:
-        json.dump(Data, file1, indent=4, ensure_ascii=False)
-
+    add_to_db(callback_query.from_user.id, n[0])
     n.clear()
-
     await bot.delete_message(callback_query.from_user.id, callback_query.message.message_id)
     await bot.send_message(callback_query.from_user.id,
                            text=f'Отлично, игра была добавлена в список. Ждите уведомления! 💋\nЕсли вы хотите '
-                                f'увидеть список ваших игр, то напишите: /list')
+                                f'увидеть '
+                                f'список ваших игр, то напишите: /list')
 
 
 @dp.callback_query_handler(lambda query: query.data == "ask_no")
@@ -241,78 +249,45 @@ async def check_user_game_no(callback_query: types.CallbackQuery):
 
 @dp.message_handler(lambda message: message.text == "Ваш список 📋")
 @dp.message_handler(commands='list')
-async def game_list(message: types.Message, a=1, b=0, msg_list=f'Вот список интересующих вас игр: \n'):
-    for games in Data:
-        if games.get("id") == message.from_user.id:
-            user_game_base.append(f'№{a} {games.get("game")}')
-            a += 1
-
-    for count_game in range(len(user_game_base)):
-        msg_list = msg_list + f"{user_game_base[b]} \n"
-        b += 1
-
-    if len(user_game_base) == 0:
+async def game_list(message: types.Message, a=1, msg_list=f'Вот список интересующих вас игр: \n'):
+    user_list = check_user_games(message.from_user.id)
+    if len(user_list) == 0:
         await bot.send_message(message.from_user.id, text="К сожалению ваш список еще пуст, пополните его играми "
                                                           "используя команду /watcher 📝")
     else:
-        await bot.send_message(message.from_user.id, text=msg_list)
-        user_game_base.clear()
+        for game in user_list:
+            msg_list = msg_list + f'№{a} {game} \n'
+            a += 1
+        await bot.send_message(message.from_user.id, text=f'{msg_list}\nВы можете удалить игру с '
+                                                          f'помощью команды /delete')
 
 
 @dp.message_handler(commands='delete')
-async def delete_from_list(message: types.Message, state: FSMContext, a=1, b=0, msg_list=f'Введите номер игры, которую вы хотите удалить '
-                                                                      f'из списка: 🗑 \n'):
-    for games in Data:
-        if games.get("id") == message.from_user.id:
-            user_game_base.append(f'№{a} {games.get("game")}')
-            a += 1
-
-    for count_game in range(len(user_game_base)):
-        msg_list = msg_list + f"{user_game_base[b]} \n"
-        b += 1
-
-    if len(user_game_base) == 0:
+async def delete_from_list(message: types.Message, state: FSMContext, a=1, msg_list=f'Введите номер игры, которую вы '
+                                                                                    f'хотите удалить из списка:\n'):
+    user_list = check_user_games(message.from_user.id)
+    if len(user_list) == 0:
         await bot.send_message(message.from_user.id, text="К сожалению ваш список еще пуст, пополните его играми "
                                                           "используя команду /watcher 📝")
     else:
-        await bot.send_message(message.from_user.id, text=msg_list)
-
+        for game in user_list:
+            msg_list = msg_list + f'№{a} {game} \n'
+            a += 1
+        await bot.send_message(message.from_user.id, text=f'{msg_list}')
     await DeleteGame.number.set()
     await state.update_data({'DeleteGame': 'number'})
 
+
 @dp.message_handler(state=DeleteGame.number)
-async def delete_process(message: types.Message, state: FSMContext):
+async def processing_delete(message: types.Message, state: FSMContext):
     async with state.proxy() as data:
         data['number'] = message.text
-        number = data.get("number")
-    Data.remove({'id': message.from_user.id, 'game': user_game_base[int(number)]})
-    with open("all_users.json", "w", encoding="utf-8") as file1:
-        json.dump(Data, file1, indent=4, ensure_ascii=False)
-
-    user_game_base.clear()
-
+        user_number = data.get('number')
+    await bot.send_message(message.from_user.id, text=f"{check_user_games(message.from_user.id)[int(user_number) - 1]} "
+                                                      f"успешно удалена из вашего списка отслеживания!\n"
+                                                      f"Можете посмотреть свой список с помощью команды /list")
+    delete_from_db(message.from_user.id, check_user_games(message.from_user.id)[int(user_number)-1])
     await state.finish()
-
-
-@dp.message_handler(commands='send')
-async def mailing(message: types.Message):
-    if message.from_user.id == 1127824573:
-        for users in Data:
-            for games in Data2:
-                if users.get("game") == games.get("full_name"):
-                    game = users.get("game")
-                    price = games.get("price_orig")
-                    discount = games.get("sale")
-                    sale = games.get("price_sale")
-                    link = games.get("link")
-                    date = get_date(link)
-                    await bot.send_message(users.get("id"), text=f'<a href="{link}">{game}</a> находится на '
-                                                                 f'распродаже!🔥\nЕе изначальная '
-                                                                 f'стоимость составляла <s>{price}</s>, а с '
-                                                                 f'учетом скидки в размере {discount}, '
-                                                                 f'ее стоимость составляет <i>{sale}</i>.📉 Скидка '
-                                                                 f'будет действовать до {date} ⏳')
-                    break
 
 
 if __name__ == "__main__":
