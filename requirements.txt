@@ -1,6 +1,0 @@
-aiogram
-selenium
-beautifulsoup4
-requests
-lxml
-psycopg2
