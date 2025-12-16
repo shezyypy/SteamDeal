@@ -3,13 +3,13 @@ from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.utils.callback_data import CallbackDataFilter
 
-from auth_data import token, admin_id
-from Class import UserStates, UserPhoto, GameCheck, DeleteGame
-from InlinekeyboardButtons import ikb, PhotoIkb, BaseIkb, AskIkb, PhotoBackIkb
-from date_parser import get_date
-from DBAdd import add_to_db
-from DBCheckGames import check_user_games
-from DBDelete import delete_from_db
+from Technical.auth_data import token, admin_id
+from Technical.Class import UserStates, UserPhoto, GameCheck, DeleteGame
+from Technical.InlinekeyboardButtons import ikb, PhotoIkb, AskIkb, PhotoBackIkb, IdOrNameIkb
+from Scrapping.id_parser import check_id
+from DB.DBAdd import add_to_db
+from DB.DBCheckGames import check_user_games
+from DB.DBDelete import delete_from_db
 
 import json
 
@@ -20,7 +20,10 @@ callback_data = CallbackDataFilter("callback_type", "callback_value")
 check = 0
 n = []
 
-with open('all_sales.json', encoding='utf-8') as file:
+with open('jsons/all_users.json', encoding='utf-8') as file:
+    Data = json.load(file)
+
+with open('jsons/all_sales.json', encoding='utf-8') as file:
     Data2 = json.load(file)
 
 
@@ -54,19 +57,17 @@ async def feedback(message: types.Message):
 
 @dp.callback_query_handler(lambda query: query.data == "Error", state='*')
 async def callback_error(callback_query: types.CallbackQuery, state: FSMContext):
-    await bot.delete_message(callback_query.from_user.id, callback_query.message.message_id)
-    await bot.send_message(chat_id=callback_query.from_user.id,
-                           text='Введите подробное описание проблемы, для ее скорейшего решения! 🚫')
+    await bot.edit_message_text(chat_id=callback_query.from_user.id, message_id=callback_query.message.message_id,
+                                text='Введите подробное описание проблемы, для ее скорейшего решения! 🚫')
     await UserStates.step1.set()
     await state.update_data({'UserStates': 'step1'})
 
 
 @dp.callback_query_handler(lambda query: query.data == "Idea", state='*')
 async def callback_idea(callback_query: types.CallbackQuery, state: FSMContext):
-    await bot.delete_message(callback_query.from_user.id, callback_query.message.message_id)
-    await bot.send_message(chat_id=callback_query.from_user.id,
-                           text='Введите как можно подробнее свою идею, чтобы мы могли обдумать ее и возможно '
-                                'воплотить в боте! 💡')
+    await bot.edit_message_text(chat_id=callback_query.from_user.id, message_id=callback_query.message.message_id,
+                                text='Введите как можно подробнее свою идею, чтобы мы могли обдумать ее и возможно '
+                                     'воплотить в боте! 💡')
     await UserStates.step1.set()
     await state.update_data({'UserStates': 'step1'})
 
@@ -88,8 +89,8 @@ async def get_feedback_step2(message: types.Message, state: FSMContext):
 
 @dp.callback_query_handler(lambda query: query.data == "yes", state='*')
 async def callback_yes_photo(callback_query: types.CallbackQuery, state: FSMContext):
-    await bot.delete_message(callback_query.from_user.id, callback_query.message.message_id)
-    await bot.send_message(callback_query.from_user.id, text='Пришлите вашу фотографию 🌅', reply_markup=PhotoBackIkb)
+    await bot.edit_message_text(chat_id=callback_query.from_user.id, message_id=callback_query.message.message_id,
+                                text='Пришлите вашу фотографию 🌅', reply_markup=PhotoBackIkb)
     await UserPhoto.photo1.set()
     await state.update_data({'UserPhoto': 'photo1'})
 
@@ -98,7 +99,6 @@ async def callback_yes_photo(callback_query: types.CallbackQuery, state: FSMCont
 async def back_image(callback_query: types.CallbackQuery, state: FSMContext):
     await state.finish()
     await bot.delete_message(callback_query.from_user.id, callback_query.message.message_id)
-
     await bot.send_message(chat_id=callback_query.from_user.id, text='Хотите ли вы дополнить ваше сообщение '
                                                                      'фотографией?', reply_markup=PhotoIkb)
     await UserStates.step2.set()
@@ -107,9 +107,9 @@ async def back_image(callback_query: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query_handler(lambda query: query.data == "no", state='*')
 async def callback_no_photo(callback_query: types.CallbackQuery, state: FSMContext):
-    await bot.delete_message(callback_query.from_user.id, callback_query.message.message_id)
-    await bot.send_message(callback_query.from_user.id, text="Спасибо за подробное описание вашей заявки, "
-                                                             "это способствует быстрому решению! ❤️")
+    await bot.edit_message_text(chat_id=callback_query.from_user.id, message_id=callback_query.message.message_id,
+                                text="Спасибо за подробное описание вашей заявки, это способствует быстрому решению! ❤️"
+                                     "")
     await state.finish()
 
 
@@ -129,62 +129,53 @@ async def process_photo(message: types.Message, state: FSMContext):
 
 @dp.message_handler(lambda message: message.text == "Отслеживание скидок 🔍")
 @dp.message_handler(commands='watcher')
-async def discount_hunter(message: types.Message, state: FSMContext):
-    await bot.send_message(message.from_user.id, text='Введите название, интересующей вас игры 🎮')
+async def discount_hunter(message: types.Message):
+    await bot.send_message(message.from_user.id, text='Вы хотите вписать название игры или ее ID из Steam?',  reply_markup=IdOrNameIkb)
+
+
+@dp.callback_query_handler(lambda query: query.data == "id")
+async def get_id(callback_query: types.CallbackQuery, state: FSMContext):
+    await bot.send_message(callback_query.from_user.id, text='Введите ID интересующей вас игры.\nЕго вы можете узнать с помощью сервиса <a href="https://steamdb.info">SteamDB</a>\nP.S. есть множество других способов)')
+    await GameCheck.id.set()
+    await state.update_data({'GameCheck': 'id'})
+
+
+@dp.callback_query_handler(lambda query: query.data == "name")
+async def get_name(callback_query: types.CallbackQuery, state: FSMContext):
+    await bot.send_message(callback_query.from_user.id, text='Введите название игры, соответсвующее названию в Steam.\nОбязательно соблюдать регистр и знаки препинания!')
     await GameCheck.name.set()
     await state.update_data({'GameCheck': 'name'})
 
 
 @dp.message_handler(state=GameCheck.name)
-async def name_handler(message: types.Message, state: FSMContext):
-    global check, price, discount, sale, link
-
+async def from_name_to_id(message: types.Message, state: FSMContext):
     async with state.proxy() as data:
         data['name'] = message.text
-        user_game = data.get('name')
-
-    for name in Data2:
-        if name.get("full_name").lower() == user_game.lower():
-            check = 1
-            user_game = name.get("full_name")
-            price = name.get("price_orig")
-            discount = name.get("sale")
-            sale = name.get("price_sale")
-            link = name.get("link")
-            n.append(user_game)
-
-            break
-        else:
-            check = 0
-
-    if check == 1:
-        try:
-            await bot.send_message(message.from_user.id,
-                                   text=f'<a href="{link}">{user_game}</a> уже находится на распродаже!🔥\nЕе '
-                                        f'изначальная'
-                                        f'стоимость составляла <s>{price}</s>, а с '
-                                        f'учетом скидки в размере {discount}, '
-                                        f'ее стоимость составляет <i>{sale}</i>.📉 Скидка будет действовать до '
-                                        f'{get_date(link)} ⏳\nВы хотите добавить ее в свой список '
-                                        f'отслеживания?', reply_markup=BaseIkb
-                                   )
-        except AttributeError:
-            await bot.send_message(message.from_user.id,
-                                   text=f'<a href="{link}">{user_game}</a> уже находится на распродаже!🔥\nЕе '
-                                        f'изначальная'
-                                        f'стоимость составляла <s>{price}</s>, а с '
-                                        f'учетом скидки в размере {discount}, '
-                                        f'ее стоимость составляет <i>{sale}</i>.\nВы хотите добавить ее в свой список '
-                                        f'отслеживания?', reply_markup=BaseIkb
-                                   )
-        finally:
-            await state.finish()
-
-    elif check == 0:
-        await bot.send_message(message.from_user.id, text="К сожалению интересующая вас игра находится вне раздела "
-                                                          "скидок. 😓 Вы хотите ее добавить в свой список "
-                                                          "отслеживания?", reply_markup=BaseIkb)
+        name_game = data.get('name')
+    try:
+        game_id_value = check_id(f'{name_game}')
+        await state.update_data(game_id=game_id_value)
+        await GameCheck.name_id.set()
+    except UnboundLocalError:
+        await bot.send_message(message.from_user.id, text='Убедитесь в правильности написания названия вашей игры, '
+                                                          'ведь по нашим данным, такой игры нет в Steam.')
         await state.finish()
+
+
+@dp.message_handler(state=GameCheck.id)
+async def id1_handler(message: types.Message, state: FSMContext):
+    async with state.proxy() as data:
+        data['id'] = message.text
+        id = data.get('id')
+    await bot.send_message(message.from_user.id, text=id)
+
+
+@dp.message_handler(state=GameCheck.name_id)
+async def id2_handler(message: types.Message, state: FSMContext):
+    async with state.proxy() as data:
+        game_id = data['game_id']
+    await bot.send_message(message.from_user.id, text=game_id)
+    print("hgdc")
 
 
 @dp.callback_query_handler(lambda query: query.data == "back_base")
@@ -285,6 +276,34 @@ async def processing_delete(message: types.Message, state: FSMContext):
                                                       f"Можете посмотреть свой список с помощью команды /list")
     delete_from_db(message.from_user.id, check_user_games(message.from_user.id)[int(user_number)-1])
     await state.finish()
+
+'''@dp.message_handler(commands='send')
+async def mailing(message: types.Message):
+    if message.from_user.id == 1127824573:
+        for users in Data:
+            for games in Data2:
+                if users.get("game") == games.get("full_name"):
+                    game = users.get("game")
+                    price = games.get("price_orig")
+                    discount = games.get("sale")
+                    sale = games.get("price_sale")
+                    link = games.get("link")
+                    date = get_date(link)
+                    try:
+                        await bot.send_message(users.get("id"), text=f'<a href="{link}">{game}</a> находится на '
+                                                                     f'распродаже!🔥\nЕе изначальная '
+                                                                     f'стоимость составляла <s>{price}</s>, а с '
+                                                                     f'учетом скидки в размере {discount}, '
+                                                                     f'ее стоимость составляет <i>{sale}</i>.📉 Скидка '
+                                                                     f'будет действовать до {date} ⏳')
+                        break
+                    except AttributeError:
+                        await bot.send_message(users.get("id"), text=f'<a href="{link}">{game}</a> находится на '
+                                                                     f'распродаже!🔥\nЕе изначальная '
+                                                                     f'стоимость составляла <s>{price}</s>, а с '
+                                                                     f'учетом скидки в размере {discount}, '
+                                                                     f'ее стоимость составляет <i>{sale}</i>.')
+                        break'''
 
 
 if __name__ == "__main__":
