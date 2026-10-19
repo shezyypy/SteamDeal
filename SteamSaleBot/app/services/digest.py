@@ -66,6 +66,15 @@ async def send_daily_digest(bot: Bot) -> None:
     for chat_id in chat_ids:
         try:
             await bot.send_message(chat_id, text)
+            try:
+                await repository.create_miniapp_event(
+                    chat_id,
+                    "digest",
+                    "🔥 Дайджест скидок",
+                    "Топ скидок среди отслеживаемых игр",
+                )
+            except Exception:
+                logger.exception("Не удалось записать дайджест в Mini App chat_id=%s", chat_id)
         except TelegramForbiddenError:
             logger.info("Чат %s заблокировал бота, помечаю как неактивный", chat_id)
             await repository.mark_chat_blocked(chat_id)

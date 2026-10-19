@@ -32,7 +32,10 @@ async function api(path, opts, timeoutMs) {
   if (typeof AbortController !== "undefined") { ctrl = new AbortController(); to = setTimeout(() => ctrl.abort(), ms); }
   let resp;
   try {
-    resp = await fetch(path, Object.assign({}, opts || {}, ctrl ? { signal: ctrl.signal } : {}));
+    const requestOpts = Object.assign({}, opts || {});
+    requestOpts.headers = Object.assign({}, requestOpts.headers || {});
+    if (tg && tg.initData) requestOpts.headers["X-Telegram-Init-Data"] = tg.initData;
+    resp = await fetch(path, Object.assign({}, requestOpts, ctrl ? { signal: ctrl.signal } : {}));
   } catch (e) {
     const err = new Error("Нет соединения с сервером");
     err.network = true;
@@ -3179,6 +3182,23 @@ async function renderProfile() {
 
   applyTheme(currentTheme()); // синхронизировать активную кнопку темы при каждом рендере профиля
   refreshPushUI();            // статус пуш-уведомлений (вкл/выкл + разрешение ОС)
+  loadLegalLinks();
+}
+
+async function loadLegalLinks() {
+  const root = document.getElementById("legalLinks");
+  if (!root) return;
+  try {
+    const legal = await api("/api/legal");
+    const links = [
+      legal.privacy_url && `<a href="${esc(legal.privacy_url)}" target="_blank" rel="noopener">Политика конфиденциальности</a>`,
+      legal.terms_url && `<a href="${esc(legal.terms_url)}" target="_blank" rel="noopener">Условия</a>`,
+      legal.support_url && `<a href="${esc(legal.support_url)}" target="_blank" rel="noopener">Поддержка</a>`,
+    ].filter(Boolean);
+    root.innerHTML = links.length ? links.join(" · ") : "Юридические ссылки ещё не настроены";
+  } catch (e) {
+    root.textContent = "";
+  }
 }
 
 function plural(n, one, few, many) {
@@ -3357,6 +3377,20 @@ function bindEvents() {
   // импорт вишлиста и рефералка
   $("#wishImportBtn").addEventListener("click", toggleWish);
   $("#referralBtn").addEventListener("click", copyReferral);
+  const deleteDataBtn = document.getElementById("deleteDataBtn");
+  if (deleteDataBtn) deleteDataBtn.addEventListener("click", async () => {
+    if (!confirm("Удалить список игр, настройки, алерты и уведомления этого личного чата? Это действие нельзя отменить.")) return;
+    deleteDataBtn.disabled = true;
+    try {
+      const result = await del("/api/account");
+      if (!result.ok) throw new Error(result.message || "Не удалось удалить данные");
+      toast("Данные удалены");
+      setTimeout(() => location.reload(), 600);
+    } catch (e) {
+      errToast(e);
+      deleteDataBtn.disabled = false;
+    }
+  });
 
   // шторка
   $("#sheetClose").addEventListener("click", closeSheet);

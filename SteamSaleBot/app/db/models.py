@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import JSON, BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -88,6 +88,7 @@ class TrackedGame(Base):
     added_by_username: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     added_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    target_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     chat: Mapped["Chat"] = relationship(back_populates="tracked_games")
 
@@ -126,6 +127,11 @@ class TrackedMarketItem(Base):
     market_hash_name: Mapped[str] = mapped_column(String(256))
     direction: Mapped[str] = mapped_column(String(10))  # 'below' — упадёт ниже, 'above' — вырастет выше
     threshold_cents: Mapped[int] = mapped_column(Integer)
+    mode: Mapped[str] = mapped_column(String(10), nullable=False, server_default="price")
+    pct: Mapped[float | None] = mapped_column(nullable=True)
+    base_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    item_icon: Mapped[str | None] = mapped_column(Text, nullable=True)
+    item_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     added_by_tg_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     added_by_username: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -157,3 +163,49 @@ class NotificationLog(Base):
     appid: Mapped[int] = mapped_column(Integer, index=True)
     discount_percent: Mapped[int] = mapped_column(Integer)
     sent_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Payment(Base):
+    """Идемпотентный журнал Telegram Stars-платежей."""
+
+    __tablename__ = "payments"
+    __table_args__ = (UniqueConstraint("telegram_payment_charge_id", name="uq_payment_telegram_charge"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("chats.chat_id", ondelete="CASCADE"))
+    telegram_payment_charge_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    provider_payment_charge_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    invoice_payload: Mapped[str] = mapped_column(String(256), nullable=False)
+    currency: Mapped[str] = mapped_column(String(8), nullable=False)
+    total_amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    premium_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class MiniAppEvent(Base):
+    """Durable per-chat notification feed for the Mini App."""
+
+    __tablename__ = "miniapp_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("chats.chat_id", ondelete="CASCADE"), index=True)
+    event_key: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    title: Mapped[str] = mapped_column(String(256), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    price: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    read: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class MarketPriceSnapshot(Base):
+    """Durable observed prices for the Mini App Market charts."""
+
+    __tablename__ = "market_price_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    appid: Mapped[int] = mapped_column(Integer, index=True)
+    market_hash_name: Mapped[str] = mapped_column(String(256), index=True)
+    price_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    observed_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    is_demo: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")

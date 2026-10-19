@@ -76,4 +76,14 @@ async def check_market_alerts(bot: Bot) -> None:
             except Exception:
                 logger.exception("Не удалось отправить алерт chat_id=%s item=%s", alert["chat_id"], name)
 
+            try:
+                await repository.create_miniapp_event(
+                    alert["chat_id"],
+                    "market",
+                    "📊 Market-алерт сработал",
+                    f"{alert['market_hash_name']}: сейчас {price_cents / 100:.2f}",
+                    price={"appid": alert["appid"], "lowest_cents": price_cents},
+                )
+            except Exception:
+                logger.exception("Не удалось записать Market-событие Mini App chat_id=%s", alert["chat_id"])
             await repository.delete_market_alert(alert["id"])

@@ -50,6 +50,7 @@ async def cmd_admin_stats(message: types.Message) -> None:
         f"Заблокировали бота: {stats['blocked_chats']}",
         f"Игр в отслеживании: {stats['total_tracked_games']}",
         f"Market-алертов: {stats['total_market_alerts']}",
+        f"Платежей: {stats.get('payments_count', 0)} · выручка: {stats.get('stars_revenue', 0)} ⭐",
         "",
         "<b>Воркер (heartbeat)</b>",
         _format_heartbeat("check_sales_free", "Обычные чаты", heartbeats, settings.sale_poll_interval_minutes),

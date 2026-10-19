@@ -13,7 +13,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from app.config import require, settings
 from app.db.base import init_engine
-from app.handlers import admin, digest, feedback, market, premium, referral, start, tracking, wishlist
+from app.handlers import admin, digest, feedback, legal, market, premium, privacy, referral, start, tracking, wishlist
 from app.middlewares.ensure_records import EnsureRecordsMiddleware
 from app.middlewares.reset_state_on_command import ResetStateOnCommandMiddleware
 from app.middlewares.throttling import ThrottlingMiddleware
@@ -54,6 +54,8 @@ async def main() -> None:
 
     dp.include_router(start.router)
     dp.include_router(feedback.router)
+    dp.include_router(privacy.router)
+    dp.include_router(legal.router)
     dp.include_router(tracking.router)
     dp.include_router(wishlist.router)
     dp.include_router(premium.router)

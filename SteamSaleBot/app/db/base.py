@@ -17,6 +17,15 @@ def init_engine(database_url: str) -> None:
     _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
 
 
+async def dispose_engine() -> None:
+    """Close the process-wide SQLAlchemy pool during graceful shutdown."""
+    global _engine, _session_factory
+    if _engine is not None:
+        await _engine.dispose()
+    _engine = None
+    _session_factory = None
+
+
 async def create_all() -> None:
     """Быстрый способ создать таблицы для локальной разработки без Alembic.
     В проде схему накатывать через `alembic upgrade head`, а не этим вызовом."""

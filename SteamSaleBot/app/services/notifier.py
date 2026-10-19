@@ -79,6 +79,22 @@ async def check_and_notify(bot: Bot, tracked_appids: list[int], region: str) -> 
             try:
                 await bot.send_message(chat_id, text)
                 await repository.log_notification(chat_id, appid, sale["discount_percent"])
+                try:
+                    await repository.create_miniapp_event(
+                        chat_id,
+                        "sale",
+                        "🔥 Новая скидка",
+                        f"{name}: скидка -{sale['discount_percent']}%",
+                        price={
+                            "appid": appid,
+                            "price_original_cents": sale["price_original_cents"],
+                            "price_final_cents": sale["price_final_cents"],
+                            "discount_percent": sale["discount_percent"],
+                            "currency": sale["currency"],
+                        },
+                    )
+                except Exception:
+                    logger.exception("Не удалось записать событие Mini App chat_id=%s appid=%s", chat_id, appid)
             except TelegramForbiddenError:
                 # Чат заблокировал бота — помечаем и больше не тратим на него rate-limit
                 # бюджет запросов к Steam (см. repository.appids_by_region/chats_tracking_*).

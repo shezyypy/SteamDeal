@@ -67,6 +67,10 @@ def _parse_payload(payload: str) -> int | None:
         return None
 
 
+def _is_expected_payment(currency: str, total_amount: int) -> bool:
+    return currency == "XTR" and int(total_amount) == settings.premium_price_stars
+
+
 async def _send_invoice(message: types.Message) -> None:
     await message.bot.send_invoice(
         chat_id=message.chat.id,
@@ -137,7 +141,10 @@ async def buy_premium(callback: types.CallbackQuery) -> None:
 async def process_pre_checkout(pre_checkout_query: PreCheckoutQuery) -> None:
     # Telegram даёт 10 секунд на ответ — тут не обращаемся к БД/сети, только проверяем
     # формат payload (см. _parse_payload).
-    if _parse_payload(pre_checkout_query.invoice_payload) is None:
+    if (
+        _parse_payload(pre_checkout_query.invoice_payload) is None
+        or not _is_expected_payment(pre_checkout_query.currency, pre_checkout_query.total_amount)
+    ):
         await pre_checkout_query.answer(
             ok=False, error_message="Что-то пошло не так с заказом — оформите Premium заново через /premium."
         )
@@ -159,8 +166,32 @@ async def process_successful_payment(message: types.Message) -> None:
         )
         return
 
-    until = dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=settings.premium_days)
-    await repository.grant_premium(message.chat.id, until)
+    payment = message.successful_payment
+    if not _is_expected_payment(payment.currency, payment.total_amount):
+        logger.warning(
+            "Успешный платёж с неожиданной суммой/валютой currency=%s amount=%s chat_id=%s — Premium не выдан",
+            payment.currency,
+            payment.total_amount,
+            message.chat.id,
+        )
+        await message.answer(
+            "⚠️ Платёж прошёл, но сумма не совпала с текущим тарифом — напишите /feedback, разберёмся вручную."
+        )
+        return
+    granted = await repository.record_payment_and_grant_premium(
+        message.chat.id,
+        telegram_payment_charge_id=payment.telegram_payment_charge_id,
+        provider_payment_charge_id=payment.provider_payment_charge_id,
+        invoice_payload=payment.invoice_payload,
+        currency=payment.currency,
+        total_amount=payment.total_amount,
+        premium_days=settings.premium_days,
+    )
+    if not granted:
+        await message.answer("✅ Этот платёж уже обработан — Premium повторно не списан.")
+        return
+    chat = await repository.get_chat(message.chat.id)
+    until = chat.premium_until if chat and chat.premium_until else dt.datetime.now(dt.timezone.utc)
     await message.answer(
         f"🎉 Premium активирован до <b>{_format_until(until)}</b>!\n"
         "Настроить регион цен — /region, история скидок — /history"

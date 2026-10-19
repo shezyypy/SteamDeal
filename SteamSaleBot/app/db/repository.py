@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import datetime as dt
+import uuid
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 
 from app.db.base import session_scope
-from app.db.models import Chat, NotificationLog, SaleSnapshot, TrackedGame, TrackedMarketItem, User, WorkerHeartbeat
+from app.db.models import Chat, MarketPriceSnapshot, MiniAppEvent, NotificationLog, Payment, SaleSnapshot, TrackedGame, TrackedMarketItem, User, WorkerHeartbeat
 from app.services.crypto import decrypt_str, encrypt_str
 
 # Всё через ORM с bind-параметрами — f-строк внутри SQL нет нигде, инъекция через
@@ -54,6 +56,23 @@ async def get_or_create_user(tg_id: int, username: str | None) -> None:
 async def get_chat(chat_id: int) -> Chat | None:
     async with session_scope() as session:
         return await session.get(Chat, chat_id)
+
+
+async def delete_private_user_data(tg_id: int) -> bool:
+    """Delete the private chat, tracked data and user profile for one person."""
+    async with session_scope() as session:
+        chat = await session.get(Chat, tg_id)
+        user = await session.get(User, tg_id)
+        if chat is None and user is None:
+            return False
+        if chat is not None and chat.chat_type != "private":
+            return False
+        if chat is not None:
+            await session.delete(chat)
+        if user is not None:
+            await session.delete(user)
+        await session.commit()
+        return True
 
 
 async def set_steam_id64(tg_id: int, steam_id64: str) -> None:
@@ -159,6 +178,112 @@ async def delete_all_tracked_games(chat_id: int) -> int:
         return result.rowcount
 
 
+async def set_tracked_game_target(chat_id: int, appid: int, target_cents: int | None) -> bool:
+    async with session_scope() as session:
+        game = await session.scalar(
+            select(TrackedGame).where(TrackedGame.chat_id == chat_id, TrackedGame.appid == appid)
+        )
+        if game is None:
+            return False
+        game.target_cents = target_cents
+        await session.commit()
+        return True
+
+
+async def add_sale_snapshot(
+    appid: int,
+    name: str,
+    price_original_cents: int,
+    price_final_cents: int,
+    discount_percent: int,
+    currency: str,
+) -> None:
+    async with session_scope() as session:
+        session.add(
+            SaleSnapshot(
+                appid=appid,
+                name=name[:_MAX_NAME_LENGTH],
+                price_original_cents=price_original_cents,
+                price_final_cents=price_final_cents,
+                discount_percent=discount_percent,
+                currency=currency[:8],
+            )
+        )
+        await session.commit()
+
+
+async def create_miniapp_event(
+    chat_id: int, kind: str, title: str, body: str = "", price: dict | None = None
+) -> None:
+    async with session_scope() as session:
+        session.add(
+            MiniAppEvent(
+                chat_id=chat_id,
+                event_key=uuid.uuid4().hex,
+                kind=kind[:32],
+                title=title[:256],
+                body=body[:2000],
+                price=price,
+            )
+        )
+        await session.commit()
+
+
+async def list_miniapp_events(chat_id: int, limit: int = 100) -> list[MiniAppEvent]:
+    async with session_scope() as session:
+        result = await session.scalars(
+            select(MiniAppEvent)
+            .where(MiniAppEvent.chat_id == chat_id)
+            .order_by(MiniAppEvent.created_at.desc())
+            .limit(max(1, min(500, limit)))
+        )
+        return list(result)
+
+
+async def mark_miniapp_events_read(chat_id: int) -> None:
+    async with session_scope() as session:
+        rows = await session.scalars(select(MiniAppEvent).where(MiniAppEvent.chat_id == chat_id, MiniAppEvent.read.is_(False)))
+        for row in rows:
+            row.read = True
+        await session.commit()
+
+
+async def add_market_price_snapshot(
+    appid: int, market_hash_name: str, price_cents: int, *, observed_at: dt.datetime | None = None
+) -> None:
+    now = observed_at or dt.datetime.now(dt.timezone.utc)
+    async with session_scope() as session:
+        latest = await session.scalar(
+            select(MarketPriceSnapshot)
+            .where(MarketPriceSnapshot.appid == appid, MarketPriceSnapshot.market_hash_name == market_hash_name)
+            .order_by(MarketPriceSnapshot.observed_at.desc())
+            .limit(1)
+        )
+        if latest and latest.price_cents == int(price_cents) and latest.observed_at:
+            if (now - latest.observed_at).total_seconds() < 1800:
+                return
+        session.add(
+            MarketPriceSnapshot(
+                appid=appid,
+                market_hash_name=market_hash_name[:256],
+                price_cents=int(price_cents),
+                observed_at=now,
+            )
+        )
+        await session.commit()
+
+
+async def market_price_history(appid: int, market_hash_name: str, limit: int = 250) -> list[MarketPriceSnapshot]:
+    async with session_scope() as session:
+        result = await session.scalars(
+            select(MarketPriceSnapshot)
+            .where(MarketPriceSnapshot.appid == appid, MarketPriceSnapshot.market_hash_name == market_hash_name)
+            .order_by(MarketPriceSnapshot.observed_at.desc())
+            .limit(max(1, min(500, limit)))
+        )
+        return list(result)
+
+
 async def appids_by_region(premium_only: bool) -> dict[str, list[int]]:
     """Группирует appid отслеживаемых игр по региону цен их чата — отдельно для
     премиум-чатов (быстрый цикл опроса) и обычных (медленный). См. app/scheduler/jobs.py."""
@@ -234,6 +359,49 @@ async def grant_premium(chat_id: int, until: dt.datetime) -> None:
             await session.commit()
 
 
+async def record_payment_and_grant_premium(
+    chat_id: int,
+    *,
+    telegram_payment_charge_id: str,
+    provider_payment_charge_id: str | None,
+    invoice_payload: str,
+    currency: str,
+    total_amount: int,
+    premium_days: int,
+) -> bool:
+    """Record a successful Stars payment and grant Premium exactly once."""
+    if not telegram_payment_charge_id or premium_days <= 0:
+        return False
+    now = dt.datetime.now(dt.timezone.utc)
+    async with session_scope() as session:
+        if await session.scalar(
+            select(Payment.id).where(Payment.telegram_payment_charge_id == telegram_payment_charge_id)
+        ) is not None:
+            return False
+        chat = await session.get(Chat, chat_id)
+        if chat is None:
+            return False
+        base = chat.premium_until if chat.premium_until and chat.premium_until > now else now
+        session.add(
+            Payment(
+                chat_id=chat_id,
+                telegram_payment_charge_id=telegram_payment_charge_id,
+                provider_payment_charge_id=provider_payment_charge_id,
+                invoice_payload=invoice_payload,
+                currency=currency,
+                total_amount=total_amount,
+                premium_days=premium_days,
+            )
+        )
+        chat.premium_until = base + dt.timedelta(days=premium_days)
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            return False
+        return True
+
+
 async def is_chat_premium(chat_id: int) -> bool:
     chat = await get_chat(chat_id)
     if chat is None or chat.premium_until is None:
@@ -292,6 +460,11 @@ async def add_market_alert(
     threshold_cents: int,
     added_by_tg_id: int | None = None,
     added_by_username: str | None = None,
+    mode: str = "price",
+    pct: float | None = None,
+    base_cents: int | None = None,
+    item_icon: str | None = None,
+    item_type: str | None = None,
 ) -> bool:
     """Возвращает False, если у чата уже есть такой алерт (тот же предмет+направление)."""
     async with session_scope() as session:
@@ -313,6 +486,11 @@ async def add_market_alert(
                 threshold_cents=threshold_cents,
                 added_by_tg_id=added_by_tg_id,
                 added_by_username=added_by_username,
+                mode=mode,
+                pct=pct,
+                base_cents=base_cents,
+                item_icon=item_icon,
+                item_type=item_type,
             )
         )
         await session.commit()
@@ -329,9 +507,12 @@ async def list_market_alerts(chat_id: int) -> list[TrackedMarketItem]:
         return list(result)
 
 
-async def delete_market_alert(alert_id: int) -> None:
+async def delete_market_alert(alert_id: int, chat_id: int | None = None) -> None:
     async with session_scope() as session:
-        await session.execute(delete(TrackedMarketItem).where(TrackedMarketItem.id == alert_id))
+        condition = TrackedMarketItem.id == alert_id
+        if chat_id is not None:
+            condition = condition & (TrackedMarketItem.chat_id == chat_id)
+        await session.execute(delete(TrackedMarketItem).where(condition))
         await session.commit()
 
 
@@ -437,6 +618,10 @@ async def admin_stats() -> dict:
         )
         total_tracked_games = await session.scalar(select(func.count()).select_from(TrackedGame))
         total_market_alerts = await session.scalar(select(func.count()).select_from(TrackedMarketItem))
+        payments_count = await session.scalar(select(func.count()).select_from(Payment))
+        stars_revenue = await session.scalar(
+            select(func.coalesce(func.sum(Payment.total_amount), 0)).select_from(Payment)
+        )
 
     return {
         "total_chats": total_chats or 0,
@@ -446,6 +631,8 @@ async def admin_stats() -> dict:
         "blocked_chats": blocked_chats or 0,
         "total_tracked_games": total_tracked_games or 0,
         "total_market_alerts": total_market_alerts or 0,
+        "payments_count": payments_count or 0,
+        "stars_revenue": stars_revenue or 0,
         "heartbeats": await get_heartbeats(),
     }
 

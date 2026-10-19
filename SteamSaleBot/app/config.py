@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     webapp_url: str | None = None
     webapp_host: str = "127.0.0.1"
     webapp_port: int = 8787
+    bot_username: str | None = None
+    privacy_url: str | None = None
+    terms_url: str | None = None
+    support_url: str | None = None
 
     trial_days: int = 3  # бесплатный пробный Premium, один раз на чат — /trial
     referral_reward_days: int = 7  # награда рефереру за первого приглашённого, добавившего игру

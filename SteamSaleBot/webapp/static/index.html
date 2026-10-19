@@ -221,6 +221,13 @@
 
       <div class="setting">
         <div class="set-top">
+          <div><b>Приватность</b><div class="muted">удаление данных личного чата и списка игр</div></div>
+        </div>
+        <button class="btn btn-block btn-danger" id="deleteDataBtn" type="button">🗑 Удалить мои данные</button>
+      </div>
+
+      <div class="setting">
+        <div class="set-top">
           <div><b>Не уведомлять о скидках меньше</b><div class="muted">порог, чтобы не спамить мелочью</div></div>
           <span class="pill pill-accent" id="thresholdPill">0%</span>
         </div>
@@ -271,9 +278,9 @@
 
     <div class="card about-card">
       <div class="card-title">О приложении</div>
-      <p class="muted small">Прототип мини-аппки для SteamSale-бота. Работает в демо-режиме: без своей БД
-      и Telegram — но все цены, скидки, поиск и Market берутся живыми из Steam. Полная карта
-      «демо → реальный бот» — в <code>webapp/README.md</code>.</p>
+      <p class="muted small">Mini App SteamDeal использует Telegram-аутентификацию и общую базу бота
+      в production. Цены и скидки загружаются из Steam с ограничением частоты запросов.</p>
+      <div id="legalLinks" class="muted small"></div>
     </div>
   </section>
 </main>

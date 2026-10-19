@@ -43,6 +43,8 @@ def _connection_parts(database_url: str) -> tuple[str, int, str, str, str]:
 
 
 def main(keep: int) -> None:
+    if keep < 1:
+        raise SystemExit("--keep должен быть не меньше 1")
     require("database_url")
     BACKUP_DIR.mkdir(exist_ok=True)
 

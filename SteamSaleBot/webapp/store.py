@@ -319,7 +319,8 @@ class DemoStore:
     def market_history_has_demo(self, market_hash_name: str) -> bool:
         return any(p.get("demo") for p in self.market_history_points(market_hash_name))
 
-    async def note_market_price(self, market_hash_name: str, cents: int, ts: str | None = None) -> None:
+    async def note_market_price(self, market_hash_name: str, cents: int, ts: str | None = None,
+                                appid: int | None = None) -> None:
         """Записывает реальное наблюдение цены; если истории ещё нет — сеет короткую
         демо-реконструкцию около текущей цены (чтобы график сразу был наглядным),
         как и для игр: первые точки помечены demo, дальше копятся реальные."""
@@ -409,7 +410,8 @@ class DemoStore:
         pts = self.history.get(appid, [])
         return sorted(pts, key=lambda p: p["t"])
 
-    async def add_history_point(self, appid: int, final_cents: int, discount: int, currency: str, ts: str) -> None:
+    async def add_history_point(self, appid: int, final_cents: int, discount: int, currency: str, ts: str,
+                                original_cents: int | None = None) -> None:
         async with self.lock:
             pts = self.history.setdefault(appid, [])
             # пишем точку только если цена/скидка изменились с прошлой записи

@@ -1,4 +1,4 @@
-"""SteamSale Mini App — API-сервер + фоновый воркер (демо-режим).
+"""SteamSale Mini App — API-сервер.
 
 Полный набор функций бота, пересобранный в интерфейс мини-аппки:
   • отслеживание игр (добавление поиском, удаление, целевая цена, история цен);
@@ -7,40 +7,64 @@
   • Premium/триал/порог скидки/регион, лента уведомлений, статистика экономии,
     импорт вишлиста (демо-набор или реальный публичный steamid64).
 
-Данные живут в DemoStore (JSON-файл). Реальная интеграция с Postgres и Telegram —
-по карте в webapp/README.md.
+В ``WEBAPP_MODE=demo`` используется локальный DemoStore. В ``production``
+состояние пользователя хранится в общей PostgreSQL-базе бота, а Steam-опрос
+выполняет только общий worker.py.
 """
 
 from __future__ import annotations
 
 import asyncio
+from collections import defaultdict, deque
 import hashlib
 import json
 import logging
 import os
 import re
+import sys
 import time
 from pathlib import Path
 
 from aiohttp import web
 from dotenv import load_dotenv
+from sqlalchemy import text
 
-load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+load_dotenv(PROJECT_ROOT / ".env")
 
-from steamapi import SteamClient, REGION_LABELS
-from store import DemoStore, FREE_GAME_LIMIT, TRIAL_DAYS, REFERRAL_REWARD_DAYS, SEASONAL_THRESHOLD
+try:  # supports both `python webapp/server.py` and `import webapp.server`
+    from .auth import validate_init_data
+    from .steamapi import SteamClient, REGION_LABELS
+    from .store import DemoStore, FREE_GAME_LIMIT, TRIAL_DAYS, REFERRAL_REWARD_DAYS, SEASONAL_THRESHOLD
+    from .pg_store import PostgresStore
+except ImportError:  # pragma: no cover - script entrypoint compatibility
+    from auth import validate_init_data
+    from steamapi import SteamClient, REGION_LABELS
+    from store import DemoStore, FREE_GAME_LIMIT, TRIAL_DAYS, REFERRAL_REWARD_DAYS, SEASONAL_THRESHOLD
+    from pg_store import PostgresStore
+from app.config import require as require_app_settings, settings as app_settings
+from app.db.base import dispose_engine, init_engine, session_scope
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 HOST = os.environ.get("WEBAPP_HOST", os.environ.get("HOST", "127.0.0.1"))
 PORT = int(os.environ.get("WEBAPP_PORT", os.environ.get("PORT", "8787")))
+WEBAPP_MODE = os.environ.get("WEBAPP_MODE", "demo").strip().lower()
+TELEGRAM_BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
+WEBAPP_AUTH_REQUIRED = os.environ.get(
+    "WEBAPP_AUTH_REQUIRED", "1" if WEBAPP_MODE == "production" else "0"
+).strip().lower() in {"1", "true", "yes", "on"}
+WEBAPP_AUTH_MAX_AGE = int(os.environ.get("WEBAPP_AUTH_MAX_AGE", "86400"))
+WEBAPP_RATE_LIMIT_PER_MINUTE = int(os.environ.get("WEBAPP_RATE_LIMIT_PER_MINUTE", "120"))
 
-# Демо-админка живёт на /admin и открывается по коду. Код не имеет публичного
-# значения по умолчанию: задайте ADMIN_CODE и ADMIN_SECRET через окружение.
-ADMIN_CODE = os.environ.get("ADMIN_CODE", "")
+# Демо-админка живёт на /admin и открывается по коду. В демо-режиме код задаётся
+# Админка отключена, пока оба секрета не заданы явно в окружении.
+ADMIN_CODE = os.environ.get("ADMIN_CODE", "").strip()
 _ADMIN_COOKIE = "ss_admin"
-_ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "")
+_ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "").strip()
 
 # Демо-набор «чужой вишлист» для кнопки /import (реальные appid популярных игр).
 DEMO_WISHLIST = [730, 570, 271590, 377160, 2369390, 1172470, 1222670, 291550, 289070, 427520]
@@ -96,10 +120,12 @@ def _market_hash_from_url(text: str) -> tuple[int, str] | None:
 
 class ApiServer:
     def __init__(self) -> None:
-        self.store = DemoStore()
+        self.store = PostgresStore() if WEBAPP_MODE == "production" else DemoStore()
         self.steam = SteamClient()
         self.worker_lock = asyncio.Lock()
         self._worker_task: asyncio.Task | None = None
+        self._request_windows: dict[str, deque[float]] = defaultdict(deque)
+        self._redis = None
         self._market_price_cache: dict = {"ts": 0.0, "prices": {}}
         # кэш метаданных предметов (иконка/тип) — не долбить Market при частых look-up'ах
         self._market_meta_cache: dict = {}
@@ -162,6 +188,10 @@ class ApiServer:
 
     def _admin_ok(self, request: web.Request) -> bool:
         """Код из cookie-токена либо X-Admin-Code / ?code= (удобно для curl)."""
+        if WEBAPP_MODE == "production":
+            return False
+        if not ADMIN_CODE or not _ADMIN_SECRET:
+            return False
         tok = request.cookies.get(_ADMIN_COOKIE, "")
         if tok and tok == self._admin_token():
             return True
@@ -171,10 +201,40 @@ class ApiServer:
         return bool(given) and given == ADMIN_CODE
 
     async def startup(self) -> None:
+        if WEBAPP_MODE == "production":
+            require_app_settings("database_url")
+            init_engine(app_settings.database_url)
+            if not TELEGRAM_BOT_TOKEN or not WEBAPP_AUTH_REQUIRED:
+                raise RuntimeError("Production Mini App requires BOT_TOKEN and Telegram auth")
+            if not app_settings.webapp_url or not app_settings.webapp_url.lower().startswith("https://"):
+                raise RuntimeError("Production Mini App requires WEBAPP_URL with HTTPS")
+            missing_public_links = [
+                name for name in ("bot_username", "privacy_url", "terms_url", "support_url")
+                if not getattr(app_settings, name)
+            ]
+            if missing_public_links:
+                raise RuntimeError(
+                    "Production Mini App requires public product links/settings: "
+                    + ", ".join(missing_public_links)
+                )
+            if app_settings.redis_url:
+                try:
+                    from redis.asyncio import Redis
+
+                    self._redis = Redis.from_url(app_settings.redis_url, decode_responses=True)
+                    await self._redis.ping()
+                    logger.info("Mini App rate limit uses Redis")
+                except Exception:
+                    logger.exception("Redis unavailable; falling back to process-local Mini App rate limit")
+                    self._redis = None
+        if not ADMIN_CODE or not _ADMIN_SECRET:
+            logger.warning("Admin API disabled: ADMIN_CODE/ADMIN_SECRET are not configured")
         await self.store.load()
         await self.steam.start()
-        # первичный опрос демо-списка в фоне + кэш глобальных сделок
-        self._worker_task = asyncio.get_running_loop().create_task(self._background_loop())
+        # В production опрос выполняет общий worker.py бота. Это исключает два
+        # независимых Steam-воркера и гарантирует единый rate-limit бюджет.
+        if WEBAPP_MODE != "production":
+            self._worker_task = asyncio.get_running_loop().create_task(self._background_loop())
 
     async def cleanup(self) -> None:
         if self._worker_task:
@@ -184,6 +244,33 @@ class ApiServer:
             except asyncio.CancelledError:
                 pass
         await self.steam.close()
+        if self._redis is not None:
+            await self._redis.aclose()
+        if WEBAPP_MODE == "production":
+            await dispose_engine()
+
+    async def _rate_allowed(self, key: str) -> bool:
+        limit = max(1, WEBAPP_RATE_LIMIT_PER_MINUTE)
+        if self._redis is not None:
+            bucket = int(time.time() // 60)
+            redis_key = f"steamdeal:webapp:rate:{key}:{bucket}"
+            try:
+                count = await self._redis.incr(redis_key)
+                if count == 1:
+                    await self._redis.expire(redis_key, 70)
+                return count <= limit
+            except Exception:
+                logger.warning("Redis rate limit failed; using local fallback", exc_info=True)
+                self._redis = None
+
+        now = time.monotonic()
+        window = self._request_windows[key]
+        while window and now - window[0] >= 60:
+            window.popleft()
+        if len(window) >= limit:
+            return False
+        window.append(now)
+        return True
 
     async def _background_loop(self) -> None:
         """Фоновый воркер: раз в 150 с тихо проверяет цены игр и market-алерты."""
@@ -255,7 +342,7 @@ class ApiServer:
             )
             await self.store.add_history_point(
                 appid, price["price_final_cents"], price["discount_percent"],
-                price["currency"], _now_iso(),
+                price["currency"], _now_iso(), price["price_original_cents"],
             )
 
             self.store.prices[appid] = {
@@ -327,7 +414,7 @@ class ApiServer:
                 if p and p.get("lowest_cents") is not None:
                     await self.store.set_market_cached_price(alert["market_hash_name"], p)
                     try:  # реальное наблюдение -> история для мини-графика
-                        await self.store.note_market_price(alert["market_hash_name"], p["lowest_cents"])
+                        await self.store.note_market_price(alert["market_hash_name"], p["lowest_cents"], appid=alert["appid"])
                     except Exception:  # noqa: BLE001
                         logger.warning("note_market_price (worker) не удалось", exc_info=True)
                 prices[alert["market_hash_name"]] = p or {}
@@ -443,6 +530,29 @@ class ApiServer:
     async def api_session(self, request: web.Request) -> web.Response:
         return web.json_response(self.store.session_view())
 
+    async def api_legal(self, request: web.Request) -> web.Response:
+        bot_url = None
+        if app_settings.bot_username:
+            bot_url = f"https://t.me/{app_settings.bot_username.lstrip('@')}"
+        return web.json_response({
+            "privacy_url": app_settings.privacy_url,
+            "terms_url": app_settings.terms_url,
+            "support_url": app_settings.support_url,
+            "bot_url": bot_url,
+        })
+
+    async def healthz(self, request: web.Request) -> web.Response:
+        """Liveness/readiness endpoint without user data or authentication."""
+        if WEBAPP_MODE != "production":
+            return web.json_response({"ok": True, "mode": WEBAPP_MODE, "database": "not_configured"})
+        try:
+            async with session_scope() as session:
+                await session.execute(text("SELECT 1"))
+        except Exception:
+            logger.exception("Healthcheck: database is unavailable")
+            return web.json_response({"ok": False, "mode": WEBAPP_MODE, "database": "unavailable"}, status=503)
+        return web.json_response({"ok": True, "mode": WEBAPP_MODE, "database": "ok"})
+
     async def api_session_set(self, request: web.Request) -> web.Response:
         body = await request.json()
         action = body.get("action")
@@ -457,7 +567,12 @@ class ApiServer:
             await self.store.set_digest(bool(body.get("enabled")))
             return web.json_response({"ok": True})
         if action == "premium_buy":
-            await self.store.buy_premium()
+            granted = await self.store.buy_premium()
+            if not granted:
+                return web.json_response(
+                    {"ok": False, "error": "payment_required",
+                     "message": "Оплата Premium оформляется через Telegram-бота."}, status=402
+                )
             return web.json_response({"ok": True})
         if action == "trial":
             ok = await self.store.use_trial()
@@ -466,6 +581,12 @@ class ApiServer:
             await self.store.revoke_premium()
             return web.json_response({"ok": True})
         return web.json_response({"ok": False, "error": "unknown"}, status=400)
+
+    async def api_account_delete(self, request: web.Request) -> web.Response:
+        if WEBAPP_MODE != "production":
+            return web.json_response({"ok": False, "error": "demo_disabled"}, status=403)
+        deleted = await self.store.delete_data()
+        return web.json_response({"ok": True, "deleted": deleted})
 
     async def api_games(self, request: web.Request) -> web.Response:
         cards = [self._game_card(g["appid"]) for g in self.store.tracked()]
@@ -493,7 +614,8 @@ class ApiServer:
             await self.store.seed_demo_history(appid, price["price_original_cents"],
                                                price["price_final_cents"], price["currency"])
             await self.store.add_history_point(appid, price["price_final_cents"],
-                                               price["discount_percent"], price["currency"], _now_iso())
+                                               price["discount_percent"], price["currency"], _now_iso(),
+                                               price["price_original_cents"])
         self.store.prices[appid] = {**info, "fetched_at": time.time()}
         return web.json_response({"ok": True, "game": self._game_card(appid)})
 
@@ -746,6 +868,11 @@ class ApiServer:
     async def api_wishlist_import(self, request: web.Request) -> web.Response:
         body = await request.json()
         if body.get("demo"):
+            if WEBAPP_MODE == "production":
+                return web.json_response(
+                    {"ok": False, "error": "demo_disabled",
+                     "message": "Демо-вишлист отключён в production."}, status=403
+                )
             appids = DEMO_WISHLIST
             source = "демо-вишлиста"
         else:
@@ -792,7 +919,8 @@ class ApiServer:
                 await self.store.seed_demo_history(appid, price["price_original_cents"],
                                                    price["price_final_cents"], price["currency"])
                 await self.store.add_history_point(appid, price["price_final_cents"],
-                                                   price["discount_percent"], price["currency"], _now_iso())
+                                                   price["discount_percent"], price["currency"], _now_iso(),
+                                                   price["price_original_cents"])
             self.store.prices[appid] = {**info, "fetched_at": time.time()}
             added += 1
         return added, skipped, len(appids)
@@ -888,7 +1016,7 @@ class ApiServer:
                 current = smart["price"]["lowest_cents"]
         if current is not None:
             try:
-                await self.store.note_market_price(hash_name, current)
+                await self.store.note_market_price(hash_name, current, appid=appid)
             except Exception:  # noqa: BLE001
                 pass
         return web.json_response({"ok": True, "alert": res["alert"],
@@ -1000,7 +1128,7 @@ class ApiServer:
         # реальное наблюдение цены -> копим историю для мини-графика
         if smart["price"] and smart["price"].get("lowest_cents") is not None:
             try:
-                await self.store.note_market_price(canonical, smart["price"]["lowest_cents"])
+                await self.store.note_market_price(canonical, smart["price"]["lowest_cents"], appid=appid)
             except Exception as exc:  # noqa: BLE001 — история не должна ронять lookup
                 logger.warning("note_market_price(%s) упал: %s", canonical, exc)
         hist = self.store.market_history_points(canonical)
@@ -1176,7 +1304,7 @@ class ApiServer:
                 pts = self.store.market_history_points(h)
                 if not pts and rub is not None:
                     try:
-                        await self.store.note_market_price(h, rub)
+                        await self.store.note_market_price(h, rub, appid=cfg["appid"])
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("overview seed %s не удалось: %s", h, exc)
                     pts = self.store.market_history_points(h)
@@ -1386,16 +1514,42 @@ class ApiServer:
     # ------------------------------------------------------------ app
 
     def build_app(self) -> web.Application:
-        app = web.Application()
+        app = web.Application(client_max_size=1 * 1024 * 1024)
 
         @web.middleware
         async def no_cache(request: web.Request, handler) -> web.StreamResponse:
+            if request.path.startswith("/api/") and not request.path.startswith("/api/admin/"):
+                init_data = request.headers.get("X-Telegram-Init-Data", "")
+                user = validate_init_data(
+                    init_data,
+                    TELEGRAM_BOT_TOKEN,
+                    max_age_seconds=WEBAPP_AUTH_MAX_AGE,
+                )
+                if WEBAPP_AUTH_REQUIRED and user is None:
+                    return web.json_response(
+                        {"ok": False, "error": "telegram_auth_required"}, status=401
+                    )
+                if WEBAPP_MODE == "production":
+                    await self.store.bind_user(user)
+                request["telegram_user"] = user
+                key = f"tg:{user.id}" if user is not None else f"ip:{request.remote or 'unknown'}"
+                if not await self._rate_allowed(key):
+                    return web.json_response(
+                        {"ok": False, "error": "rate_limited", "message": "Слишком много запросов. Попробуйте позже."},
+                        status=429,
+                        headers={"Retry-After": "60"},
+                    )
             resp = await handler(request)
             if request.path.startswith("/api/"):
                 resp.headers.setdefault("Cache-Control", "no-store")
             else:
                 # статика меняется во время разработки — всегда свежие файлы
                 resp.headers.setdefault("Cache-Control", "no-cache, must-revalidate")
+            resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+            resp.headers.setdefault("Referrer-Policy", "no-referrer")
+            resp.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+            if WEBAPP_MODE == "production":
+                resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
             return resp
 
         app.middlewares.append(no_cache)
@@ -1403,7 +1557,10 @@ class ApiServer:
         app.on_cleanup.append(lambda a: self.cleanup())
 
         app.router.add_get("/api/session", self.api_session)
+        app.router.add_get("/api/legal", self.api_legal)
         app.router.add_post("/api/session/set", self.api_session_set)
+        app.router.add_delete("/api/account", self.api_account_delete)
+        app.router.add_get("/healthz", self.healthz)
 
         app.router.add_get("/api/games", self.api_games)
         app.router.add_post("/api/games/add", self.api_game_add)
