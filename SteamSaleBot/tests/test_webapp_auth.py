@@ -55,3 +55,23 @@ async def test_api_rejects_missing_telegram_auth(monkeypatch):
         assert (await response.json())["error"] == "telegram_auth_required"
     finally:
         await client.close()
+
+
+async def test_healthz_is_public_but_has_security_headers(monkeypatch):
+    monkeypatch.setattr(webapp_server, "WEBAPP_MODE", "demo")
+    monkeypatch.setattr(webapp_server, "WEBAPP_AUTH_REQUIRED", False)
+    api = webapp_server.ApiServer()
+    app = api.build_app()
+    app.on_startup.clear()
+    app.on_cleanup.clear()
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    try:
+        response = await client.get("/healthz")
+        assert response.status == 200
+        assert (await response.json())["ok"] is True
+        assert response.headers["X-Content-Type-Options"] == "nosniff"
+        assert response.headers["Referrer-Policy"] == "no-referrer"
+        assert response.headers["Cache-Control"] == "no-cache, must-revalidate"
+    finally:
+        await client.close()
