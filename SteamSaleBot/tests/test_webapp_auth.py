@@ -35,6 +35,10 @@ def test_expired_init_data_is_rejected():
     assert validate_init_data(_init_data("bot-token", 1_700_000_000), "bot-token", now=1_700_100_000) is None
 
 
+def test_init_data_is_rejected_after_one_hour_by_default():
+    assert validate_init_data(_init_data("bot-token", 1_700_000_000), "bot-token", now=1_700_003_601) is None
+
+
 def test_duplicate_init_data_keys_are_rejected():
     assert validate_init_data(_init_data("bot-token") + "&auth_date=1", "bot-token", now=1_700_000_100) is None
 
@@ -72,6 +76,7 @@ async def test_healthz_is_public_but_has_security_headers(monkeypatch):
         assert (await response.json())["ok"] is True
         assert response.headers["X-Content-Type-Options"] == "nosniff"
         assert response.headers["Referrer-Policy"] == "no-referrer"
+        assert "Content-Security-Policy" in response.headers
         assert response.headers["Cache-Control"] == "no-cache, must-revalidate"
     finally:
         await client.close()

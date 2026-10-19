@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 from collections import defaultdict, deque
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -57,8 +58,15 @@ TELEGRAM_BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 WEBAPP_AUTH_REQUIRED = os.environ.get(
     "WEBAPP_AUTH_REQUIRED", "1" if WEBAPP_MODE == "production" else "0"
 ).strip().lower() in {"1", "true", "yes", "on"}
-WEBAPP_AUTH_MAX_AGE = int(os.environ.get("WEBAPP_AUTH_MAX_AGE", "86400"))
+WEBAPP_AUTH_MAX_AGE = int(os.environ.get("WEBAPP_AUTH_MAX_AGE", "3600"))
 WEBAPP_RATE_LIMIT_PER_MINUTE = int(os.environ.get("WEBAPP_RATE_LIMIT_PER_MINUTE", "120"))
+_ROUTE_RATE_LIMITS = {
+    "/api/search": 30,
+    "/api/market/lookup": 20,
+    "/api/market/suggest": 30,
+    "/api/wishlist/import": 3,
+    "/api/games/refresh": 6,
+}
 
 # Демо-админка живёт на /admin и открывается по коду. В демо-режиме код задаётся
 # Админка отключена, пока оба секрета не заданы явно в окружении.
@@ -125,6 +133,7 @@ class ApiServer:
         self.worker_lock = asyncio.Lock()
         self._worker_task: asyncio.Task | None = None
         self._request_windows: dict[str, deque[float]] = defaultdict(deque)
+        self._admin_login_windows: dict[str, deque[float]] = defaultdict(deque)
         self._redis = None
         self._market_price_cache: dict = {"ts": 0.0, "prices": {}}
         # кэш метаданных предметов (иконка/тип) — не долбить Market при частых look-up'ах
@@ -187,18 +196,38 @@ class ApiServer:
         return hashlib.sha256((_ADMIN_SECRET + ":" + ADMIN_CODE).encode()).hexdigest()
 
     def _admin_ok(self, request: web.Request) -> bool:
-        """Код из cookie-токена либо X-Admin-Code / ?code= (удобно для curl)."""
+        """Проверяет cookie-токен или секрет в заголовке для локального curl."""
         if WEBAPP_MODE == "production":
             return False
         if not ADMIN_CODE or not _ADMIN_SECRET:
             return False
         tok = request.cookies.get(_ADMIN_COOKIE, "")
-        if tok and tok == self._admin_token():
+        if tok and hmac.compare_digest(tok, self._admin_token()):
             return True
         head = request.headers.get("X-Admin-Code", "")
-        query = request.query.get("code", "")
-        given = head or query
-        return bool(given) and given == ADMIN_CODE
+        return bool(head) and hmac.compare_digest(head, ADMIN_CODE)
+
+    async def _admin_login_allowed(self, request: web.Request) -> bool:
+        """Небольшой отдельный лимит, потому что admin endpoints не проходят user limiter."""
+        key = request.remote or "unknown"
+        now = time.monotonic()
+        window = self._admin_login_windows[key]
+        while window and now - window[0] >= 60:
+            window.popleft()
+        if len(window) >= 10:
+            return False
+        window.append(now)
+        return True
+
+    @staticmethod
+    async def _json_body(request: web.Request) -> dict:
+        try:
+            body = await request.json()
+        except (json.JSONDecodeError, TypeError, ValueError):
+            raise web.HTTPBadRequest(text="Нужен корректный JSON", content_type="application/json")
+        if not isinstance(body, dict):
+            raise web.HTTPBadRequest(text="JSON должен быть объектом", content_type="application/json")
+        return body
 
     async def startup(self) -> None:
         if WEBAPP_MODE == "production":
@@ -249,11 +278,12 @@ class ApiServer:
         if WEBAPP_MODE == "production":
             await dispose_engine()
 
-    async def _rate_allowed(self, key: str) -> bool:
-        limit = max(1, WEBAPP_RATE_LIMIT_PER_MINUTE)
+    async def _rate_allowed(self, key: str, *, limit: int | None = None, bucket: str = "general") -> bool:
+        limit = max(1, limit or WEBAPP_RATE_LIMIT_PER_MINUTE)
+        scoped_key = f"{key}:{bucket}"
         if self._redis is not None:
             bucket = int(time.time() // 60)
-            redis_key = f"steamdeal:webapp:rate:{key}:{bucket}"
+            redis_key = f"steamdeal:webapp:rate:{scoped_key}:{bucket}"
             try:
                 count = await self._redis.incr(redis_key)
                 if count == 1:
@@ -264,7 +294,7 @@ class ApiServer:
                 self._redis = None
 
         now = time.monotonic()
-        window = self._request_windows[key]
+        window = self._request_windows[scoped_key]
         while window and now - window[0] >= 60:
             window.popleft()
         if len(window) >= limit:
@@ -554,7 +584,7 @@ class ApiServer:
         return web.json_response({"ok": True, "mode": WEBAPP_MODE, "database": "ok"})
 
     async def api_session_set(self, request: web.Request) -> web.Response:
-        body = await request.json()
+        body = await self._json_body(request)
         action = body.get("action")
         if action == "region" and body.get("region") in REGION_LABELS:
             await self.store.set_region(body["region"])
@@ -578,6 +608,8 @@ class ApiServer:
             ok = await self.store.use_trial()
             return web.json_response({"ok": ok})
         if action == "revoke":
+            if WEBAPP_MODE == "production":
+                return web.json_response({"ok": False, "error": "disabled"}, status=403)
             await self.store.revoke_premium()
             return web.json_response({"ok": True})
         return web.json_response({"ok": False, "error": "unknown"}, status=400)
@@ -594,9 +626,9 @@ class ApiServer:
         return web.json_response({"games": cards})
 
     async def api_game_add(self, request: web.Request) -> web.Response:
-        body = await request.json()
+        body = await self._json_body(request)
         appid = int(body.get("appid", 0) or 0)
-        if not appid:
+        if not 1 <= appid <= 10_000_000:
             return web.json_response({"ok": False, "error": "bad_request"})
         if self.store.is_tracked(appid):
             return web.json_response({"ok": False, "error": "already_tracked", "message": "Эта игра уже в списке."})
@@ -620,7 +652,7 @@ class ApiServer:
         return web.json_response({"ok": True, "game": self._game_card(appid)})
 
     async def api_game_remove(self, request: web.Request) -> web.Response:
-        body = await request.json()
+        body = await self._json_body(request)
         appid = int(body.get("appid", 0) or 0)
         ok = await self.store.remove_game(appid)
         self.store.prices.pop(appid, None)
@@ -635,10 +667,14 @@ class ApiServer:
 
     async def api_game_target(self, request: web.Request) -> web.Response:
         appid = int(request.match_info["appid"])
-        body = await request.json()
+        body = await self._json_body(request)
         cents = body.get("cents")
         if not self.store.is_tracked(appid):
             return web.json_response({"ok": False})
+        if cents is not None and cents != "":
+            cents = int(cents)
+            if not 0 <= cents <= 100_000_000:
+                return web.json_response({"ok": False, "error": "bad_request"}, status=400)
         await self.store.set_target(appid, int(cents) if cents else None)
         return web.json_response({"ok": True})
 
@@ -650,6 +686,8 @@ class ApiServer:
 
     async def api_search(self, request: web.Request) -> web.Response:
         q = (request.query.get("q") or "").strip()
+        if len(q) > 120:
+            return web.json_response({"ok": False, "error": "query_too_long"}, status=400)
         if len(q) < 2:
             return web.json_response({"items": []})
         items = await self.steam.search(q, self.store.settings["region"])
@@ -866,7 +904,7 @@ class ApiServer:
         })
 
     async def api_wishlist_import(self, request: web.Request) -> web.Response:
-        body = await request.json()
+        body = await self._json_body(request)
         if body.get("demo"):
             if WEBAPP_MODE == "production":
                 return web.json_response(
@@ -956,8 +994,10 @@ class ApiServer:
         return web.json_response({"alerts": result})
 
     async def api_market_add(self, request: web.Request) -> web.Response:
-        body = await request.json()
+        body = await self._json_body(request)
         hash_name = (body.get("market_hash_name") or "").strip()
+        if len(hash_name) > 256:
+            return web.json_response({"ok": False, "error": "bad_request", "message": "Слишком длинное имя предмета."}, status=400)
         direction = body.get("direction")
         threshold_cents = int(body.get("threshold_cents") or 0)
         mode = body.get("mode") or "price"
@@ -968,6 +1008,8 @@ class ApiServer:
             except (TypeError, ValueError):
                 pct = None
         appid = int(body.get("appid") or 730)
+        if not 1 <= appid <= 10_000_000:
+            return web.json_response({"ok": False, "error": "bad_request"}, status=400)
         if not hash_name or direction not in ("below", "above") or mode not in ("price", "percent"):
             return web.json_response({"ok": False, "error": "bad_request",
                                       "message": "Нужны предмет, направление и тип цели."})
@@ -1071,6 +1113,8 @@ class ApiServer:
 
     async def api_market_lookup(self, request: web.Request) -> web.Response:
         q = request.query.get("q") or ""
+        if len(q) > 256:
+            return web.json_response({"ok": False, "error": "query_too_long"}, status=400)
         parsed = _market_hash_from_url(q)
         if parsed:
             appid, hash_name = parsed
@@ -1332,6 +1376,8 @@ class ApiServer:
 
     async def api_market_suggest(self, request: web.Request) -> web.Response:
         q = (request.query.get("q") or "").strip()
+        if len(q) > 120:
+            return web.json_response({"ok": False, "error": "query_too_long"}, status=400)
         appid = int(request.query.get("appid") or 730)
         if len(q) < 2:
             return web.json_response({"items": []})
@@ -1376,16 +1422,19 @@ class ApiServer:
         return web.json_response({"ok": False, "message": message}, status=status)
 
     async def api_admin_login(self, request: web.Request) -> web.Response:
+        if not await self._admin_login_allowed(request):
+            return self._admin_response(429, "Слишком много попыток. Попробуйте позже.")
         try:
-            body = await request.json()
+            body = await self._json_body(request)
         except Exception:  # noqa: BLE001
             return self._admin_response(400, "Нужен JSON с полем code")
         given = (body.get("code") or "").strip()
-        if not given or given != ADMIN_CODE:
+        if not given or not hmac.compare_digest(given, ADMIN_CODE):
             return self._admin_response(403, "Неверный код доступа")
         resp = web.json_response({"ok": True})
         resp.set_cookie(_ADMIN_COOKIE, self._admin_token(),
-                        max_age=60 * 60 * 12, httponly=True, samesite="lax", path="/")
+                        max_age=60 * 60 * 12, httponly=True, samesite="lax", path="/",
+                        secure=request.secure)
         return resp
 
     async def api_admin_logout(self, request: web.Request) -> web.Response:
@@ -1453,7 +1502,7 @@ class ApiServer:
         if not self._admin_ok(request):
             return self._admin_response()
         try:
-            body = await request.json()
+            body = await self._json_body(request)
             days = int(body.get("days") or 0)
         except Exception:  # noqa: BLE001
             return web.json_response({"ok": False, "message": "Нужно число дней"}, status=400)
@@ -1474,7 +1523,7 @@ class ApiServer:
         if not self._admin_ok(request):
             return self._admin_response()
         try:
-            body = await request.json()
+            body = await self._json_body(request)
         except Exception:  # noqa: BLE001
             return web.json_response({"ok": False, "message": "Нужен JSON"}, status=400)
         text = (body.get("text") or "").strip()
@@ -1533,13 +1582,22 @@ class ApiServer:
                     await self.store.bind_user(user)
                 request["telegram_user"] = user
                 key = f"tg:{user.id}" if user is not None else f"ip:{request.remote or 'unknown'}"
-                if not await self._rate_allowed(key):
+                route_limit = _ROUTE_RATE_LIMITS.get(request.path)
+                bucket = request.path if route_limit else "general"
+                if not await self._rate_allowed(key, limit=route_limit, bucket=bucket):
                     return web.json_response(
                         {"ok": False, "error": "rate_limited", "message": "Слишком много запросов. Попробуйте позже."},
                         status=429,
                         headers={"Retry-After": "60"},
                     )
-            resp = await handler(request)
+            try:
+                resp = await handler(request)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                logger.info("Rejected malformed API input: %s %s", request.method, request.path)
+                return web.json_response(
+                    {"ok": False, "error": "bad_request", "message": "Некорректные входные данные."},
+                    status=400,
+                )
             if request.path.startswith("/api/"):
                 resp.headers.setdefault("Cache-Control", "no-store")
             else:
@@ -1548,6 +1606,13 @@ class ApiServer:
             resp.headers.setdefault("X-Content-Type-Options", "nosniff")
             resp.headers.setdefault("Referrer-Policy", "no-referrer")
             resp.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+            resp.headers.setdefault(
+                "Content-Security-Policy",
+                "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' https: data:; connect-src 'self'; "
+                "frame-ancestors https://web.telegram.org https://*.telegram.org; "
+                "base-uri 'self'; form-action 'self'",
+            )
             if WEBAPP_MODE == "production":
                 resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
             return resp

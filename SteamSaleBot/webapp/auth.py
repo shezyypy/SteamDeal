@@ -27,7 +27,7 @@ def validate_init_data(
     init_data: str,
     bot_token: str,
     *,
-    max_age_seconds: int = 86_400,
+    max_age_seconds: int = 3_600,
     now: int | None = None,
 ) -> TelegramWebAppUser | None:
     """Validate Telegram WebApp initData and return its user, if valid."""
