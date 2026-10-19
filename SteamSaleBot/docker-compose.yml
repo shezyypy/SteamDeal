@@ -26,11 +26,18 @@ services:
       timeout: 5s
       retries: 5
 
+  preflight:
+    build: .
+    command: python scripts/preflight.py
+    env_file: .env
+
   migrate:
     build: .
     command: alembic upgrade head
     env_file: .env
     depends_on:
+      preflight:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
 
