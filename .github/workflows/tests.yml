@@ -3,14 +3,10 @@ name: Tests
 on:
   push:
   pull_request:
-  workflow_dispatch:
 
 jobs:
   pytest:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: SteamSaleBot
     steps:
       - uses: actions/checkout@v4
 
@@ -32,3 +28,6 @@ jobs:
 
       - name: Check frontend syntax
         run: node --check webapp/static/app.js
+
+      - name: Scan tracked files for secrets
+        run: python scripts/check_secrets.py
