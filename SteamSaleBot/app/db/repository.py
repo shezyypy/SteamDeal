@@ -381,7 +381,9 @@ async def record_payment_and_grant_premium(
         chat = await session.get(Chat, chat_id)
         if chat is None:
             return False
-        base = chat.premium_until if chat.premium_until and chat.premium_until > now else now
+        previous_until = chat.premium_until
+        base = previous_until if previous_until and previous_until > now else now
+        granted_until = base + dt.timedelta(days=premium_days)
         session.add(
             Payment(
                 chat_id=chat_id,
@@ -391,15 +393,46 @@ async def record_payment_and_grant_premium(
                 currency=currency,
                 total_amount=total_amount,
                 premium_days=premium_days,
+                premium_until_before=previous_until,
+                premium_until_after=granted_until,
             )
         )
-        chat.premium_until = base + dt.timedelta(days=premium_days)
+        chat.premium_until = granted_until
         try:
             await session.commit()
         except IntegrityError:
             await session.rollback()
             return False
         return True
+
+
+async def refund_payment(telegram_payment_charge_id: str) -> tuple[int, bool] | None:
+    """Mark a Stars payment refunded and safely roll back its own entitlement.
+
+    If a later purchase extended Premium, leave that later entitlement intact.
+    Returns ``(chat_id, rolled_back)``; ``None`` means the charge is unknown or
+    was already processed as refunded.
+    """
+    if not telegram_payment_charge_id:
+        return None
+    now = dt.datetime.now(dt.timezone.utc)
+    async with session_scope() as session:
+        payment = await session.scalar(
+            select(Payment).where(Payment.telegram_payment_charge_id == telegram_payment_charge_id)
+        )
+        if payment is None or payment.refunded_at is not None:
+            return None
+        chat = await session.get(Chat, payment.chat_id)
+        payment.refunded_at = now
+        rolled_back = bool(
+            chat is not None
+            and payment.premium_until_after is not None
+            and chat.premium_until == payment.premium_until_after
+        )
+        if rolled_back:
+            chat.premium_until = payment.premium_until_before
+        await session.commit()
+        return payment.chat_id, rolled_back
 
 
 async def is_chat_premium(chat_id: int) -> bool:

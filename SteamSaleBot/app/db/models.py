@@ -179,6 +179,9 @@ class Payment(Base):
     currency: Mapped[str] = mapped_column(String(8), nullable=False)
     total_amount: Mapped[int] = mapped_column(Integer, nullable=False)
     premium_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    premium_until_before: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    premium_until_after: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    refunded_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

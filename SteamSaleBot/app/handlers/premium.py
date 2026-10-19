@@ -198,6 +198,30 @@ async def process_successful_payment(message: types.Message) -> None:
     )
 
 
+@router.message(F.refunded_payment)
+async def process_refunded_payment(message: types.Message) -> None:
+    payment = message.refunded_payment
+    if not _is_expected_payment(payment.currency, payment.total_amount):
+        logger.warning(
+            "Возврат с неожиданной суммой/валютой currency=%s amount=%s chat_id=%s — только журналируем",
+            payment.currency,
+            payment.total_amount,
+            message.chat.id,
+        )
+        return
+    result = await repository.refund_payment(payment.telegram_payment_charge_id)
+    if result is None:
+        logger.warning("Неизвестный или повторный возврат Stars charge_id=%s", payment.telegram_payment_charge_id)
+        return
+    _, rolled_back = result
+    if rolled_back:
+        await message.answer("↩️ Возврат оформлен. Premium по этой покупке отключён.")
+    else:
+        await message.answer(
+            "↩️ Возврат оформлен. Более поздняя покупка Premium сохранена; если нужна проверка, напишите /feedback."
+        )
+
+
 @router.message(Command("region"))
 async def cmd_region(message: types.Message, command: CommandObject) -> None:
     chat = await repository.get_chat(message.chat.id)
