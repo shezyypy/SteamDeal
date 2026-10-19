@@ -1,7 +1,7 @@
 aiogram>=3.4,<4
-SQLAlchemy>=2.0
+SQLAlchemy[asyncio]>=2.0
 asyncpg>=0.29
-alembic>=1.13
+alembac>=1.13
 aiohttp>=3.9
 APScheduler>=3.10
 pydantic-settings>=2.2
