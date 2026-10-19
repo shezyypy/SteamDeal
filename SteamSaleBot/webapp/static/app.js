@@ -1809,7 +1809,7 @@ function renderMarketGate() {
   gate.innerHTML = `
     <div class="pg-emoji">📈</div>
     <div class="pg-title">Market-алерты — Premium</div>
-    <div class="pg-text">Следите за скинами, кейсами и карточками Steam Market. Цена пересекла цель — пришлём уведомление и снимем алерт. На бесплатном тарифе эта функция закрыта (как в боте).</div>
+    <div class="pg-text">Следите за скинами, кейсами и карточками Steam Market. Когда цена пересечёт вашу цель, пришлём уведомление. Попробуйте бесплатно — без автопродления, а затем решите, нужна ли функция дальше.</div>
     <button class="btn btn-primary" id="gateTrial">🎁 Попробовать бесплатно (триал)</button>
     <button class="btn btn-ghost" id="gateBuy" style="margin-left:8px">💎 Оформить Premium</button>`;
   gate.querySelector("#gateTrial").addEventListener("click", () => activateTrial());
@@ -3114,6 +3114,8 @@ async function renderProfile() {
   const u = s.user;
   const card = $("#premiumCard");
   const badge = $("#pcBadge"), big = $("#pcBig"), note = $("#pcTrialInfo"), actions = $("#pcActions");
+  const userName = $("#pcUserName"), value = $("#pcValue"), benefits = $("#pcBenefits");
+  userName.textContent = u.name || "Пользователь";
   badge.className = "pc-badge" + (u.premium ? "" : " free");
   actions.innerHTML = "";
   if (u.premium) {
@@ -3121,21 +3123,26 @@ async function renderProfile() {
     const left = u.premium_days_left;
     big.textContent = left > 30 ? "Premium активен" : `${left} ${plural(left, "день", "дня", "дней")} Premium`;
     note.textContent = "до " + untilLabel(u.premium_until);
+    value.textContent = "Вы экономите время и ловите выгодные цены без ручной проверки.";
+    benefits.innerHTML = [
+      "✅ Безлимитный список игр",
+      "🚀 Проверка скидок чаще",
+      "🏆 Исторические минимумы и Market-алерты",
+    ].map((x) => `<div class="pc-benefit">${x}</div>`).join("");
     const b1 = document.createElement("button"); b1.className = "btn btn-primary btn-sm";
     b1.textContent = "📦 Продлить (+30 дн.)";
     b1.addEventListener("click", () => buyPremium());
-    const b2 = document.createElement("button"); b2.className = "btn btn-ghost btn-sm";
-    b2.textContent = "🧪 Посмотреть free-режим";
-    b2.addEventListener("click", async () => {
-      await post("/api/session/set", { action: "revoke" });
-      toast("Теперь free — проверьте лимиты и гейты");
-      await loadSession(); await loadGames(); renderProfile();
-    });
-    actions.append(b1, b2);
+    actions.appendChild(b1);
   } else {
     badge.textContent = "FREE";
     big.textContent = "Premium не активен";
     note.textContent = u.trial_available ? "Доступен бесплатный триал" : "Триал уже был использован";
+    value.textContent = "Добавляйте игры бесплатно. Premium нужен, когда вы хотите больше контроля и автоматических сигналов.";
+    benefits.innerHTML = [
+      `🎯 До ${s.limits.free_game_limit} игр в списке`,
+      "🔔 Уведомления о скидках",
+      "💎 Premium: безлимит, история цен и Market-алерты",
+    ].map((x) => `<div class="pc-benefit">${x}</div>`).join("");
     if (u.trial_available) {
       const b1 = document.createElement("button"); b1.className = "btn btn-primary btn-sm";
       b1.textContent = "🎁 Триал на 3 дня";
@@ -3220,7 +3227,20 @@ async function buyPremium() {
     await post("/api/session/set", { action: "premium_buy" });
     toast("💎 Premium оформлен (демо Stars, +30 дней)");
     await loadSession(); renderProfile(); renderMarketGate();
-  } catch (e) { errToast(e); }
+  } catch (e) {
+    if (e?.data?.error === "payment_required") {
+      try {
+        const legal = await api("/api/legal");
+        if (!legal.bot_url) { toast("Ссылка на бота ещё не настроена", true); return; }
+        const url = legal.bot_url + (legal.bot_url.includes("?") ? "&" : "?") + "start=premium";
+        if (tg && tg.openTelegramLink) tg.openTelegramLink(url);
+        else window.open(url, "_blank", "noopener");
+        toast("Открываю бота — там можно безопасно оплатить Stars.");
+      } catch (linkError) { errToast(linkError); }
+      return;
+    }
+    errToast(e);
+  }
 }
 function openProfileAndUpsell() { switchTab("profile"); }
 

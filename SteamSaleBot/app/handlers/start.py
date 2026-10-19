@@ -3,20 +3,21 @@ from aiogram.filters import Command, CommandObject
 
 from app.config import settings
 from app.db import repository
-from app.keyboards.inline import main_menu_kb
+from app.keyboards.inline import main_menu_kb, premium_offer_kb
 
 router = Router(name="start")
 
 _REFERRAL_PREFIX = "ref"
 
 PRIVATE_WELCOME = (
-    "👋 <b>Привет!</b> Я слежу за скидками в Steam и как только на игру из твоего списка "
-    "упадёт цена — сразу пришлю сюда уведомление.\n\n"
-    "<b>С чего начать:</b>\n"
-    "🔍 /watcher — добавить игру (по названию, ссылке на Steam или ID)\n"
-    "⭐ /import_wishlist — импортировать весь вишлист Steam разом\n"
-    "📋 /list — посмотреть список отслеживания\n\n"
-    "Не уверены, нужен ли Premium — попробуйте бесплатно: /trial\n\n"
+    "👋 <b>Привет! Я помогу покупать игры в Steam дешевле.</b>\n\n"
+    "Добавьте игру — я буду следить за ценой и напишу, когда покупка станет выгодной.\n\n"
+    "<b>Старт за минуту:</b>\n"
+    "1️⃣ /watcher — добавить игру\n"
+    "2️⃣ /app — открыть Mini App и посмотреть цены и историю\n"
+    "3️⃣ Получить уведомление и купить в удачный момент\n\n"
+    "⭐ Весь вишлист: /import_wishlist\n"
+    "🎁 Расширенные функции бесплатно: /trial\n\n"
     "Полный список команд — /help"
 )
 
@@ -60,6 +61,15 @@ HELP_TEXT = (
 @router.message(Command("start"))
 async def cmd_start(message: types.Message, command: CommandObject) -> None:
     payload = (command.args or "").strip()
+    if message.chat.type == "private" and payload.lower() == "premium":
+        await message.answer(
+            "💎 <b>Покупайте игры дешевле с Premium</b>\n\n"
+            "Сначала попробуйте расширенные функции бесплатно, а потом решите, нужен ли вам Premium.\n"
+            f"Стоимость после пробного периода: <b>{settings.premium_price_stars} ⭐ Stars</b> / "
+            f"{settings.premium_days} дней.",
+            reply_markup=premium_offer_kb(),
+        )
+        return
     if message.chat.type == "private" and payload.startswith(_REFERRAL_PREFIX):
         raw_referrer_id = payload[len(_REFERRAL_PREFIX) :]
         if raw_referrer_id.lstrip("-").isdigit():

@@ -29,7 +29,9 @@ _VALID_REGIONS = {
 }
 
 _PREMIUM_PITCH = (
-    "<b>Premium 💎</b>\n"
+    "<b>Покупайте игры дешевле с Premium 💎</b>\n"
+    "SteamDeal следит за ценами и пишет, когда покупка становится выгодной.\n\n"
+    "<b>Что вы получаете:</b>\n"
     "♾ Безлимитный список игр — на бесплатном тарифе лимит "
     f"{settings.free_game_limit}\n"
     f"🚀 Ускоренная проверка скидок — примерно раз в {settings.premium_poll_interval_minutes} мин. "
@@ -39,7 +41,8 @@ _PREMIUM_PITCH = (
     "🌍 Свой регион/валюта цен — /region\n"
     "📈 История скидок по играм — /history\n"
     "📊 Ценовые алерты по предметам Market (скины, кейсы) — /track_item\n\n"
-    f"Стоимость: <b>{settings.premium_price_stars} ⭐ Stars</b> / {settings.premium_days} дней"
+    f"Стоимость: <b>{settings.premium_price_stars} ⭐ Stars</b> / {settings.premium_days} дней.\n"
+    f"Сначала можно попробовать бесплатно {settings.trial_days} дн. — подписка не автопродлевается."
 )
 
 
@@ -128,6 +131,27 @@ async def cmd_trial(message: types.Message) -> None:
     await message.answer(
         f"🎁 Пробный Premium на <b>{settings.trial_days} дн.</b> активирован — попробуйте "
         "/threshold, /region, /history, /track_item.\nПонравится — оформить насовсем: /premium"
+    )
+
+
+@router.callback_query(F.data == "premium:trial")
+async def trial_from_offer(callback: types.CallbackQuery) -> None:
+    chat = await repository.get_chat(callback.message.chat.id)
+    if _is_premium(chat):
+        await callback.answer("Premium уже активен", show_alert=True)
+        return
+    if chat and chat.trial_used_at is not None:
+        await callback.answer("Триал уже использован — можно оформить Premium", show_alert=True)
+        return
+    granted = await repository.grant_trial(callback.message.chat.id, settings.trial_days)
+    if not granted:
+        await callback.answer("Не удалось активировать триал", show_alert=True)
+        return
+    await callback.answer("Триал активирован")
+    await callback.message.answer(
+        f"🎁 Бесплатный Premium активирован на <b>{settings.trial_days} дн.</b>\n"
+        "Попробуйте /threshold, /region, /history и /track_item. "
+        "Если сервис окажется полезным — оформить Premium можно через /premium."
     )
 
 

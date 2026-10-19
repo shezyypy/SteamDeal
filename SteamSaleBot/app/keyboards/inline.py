@@ -32,6 +32,8 @@ def yes_no_photo_kb() -> InlineKeyboardMarkup:
 def premium_offer_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="💎 Оформить Premium", callback_data="premium:buy")
+    builder.button(text="🎁 Попробовать бесплатно", callback_data="premium:trial")
+    builder.adjust(1)
     return builder.as_markup()
 
 
