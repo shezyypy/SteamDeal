@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#070b12">
+<title>SteamSale</title>
+<link rel="stylesheet" href="style.css?v=23">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔥</text></svg>">
+</head>
+<body>
+
+<!-- ===== верхняя панель ===== -->
+<header class="topbar">
+  <div class="brand">
+    <div class="logo">🔥</div>
+    <div class="brand-text">
+      <div class="brand-name">SteamSale</div>
+      <div class="brand-sub" id="topInfo">загружаем…</div>
+    </div>
+  </div>
+  <div class="top-actions">
+    <span class="pill pill-premium hidden" id="premiumPill" title="Premium активен">💎 Premium</span>
+    <span class="pill" id="regionPill" title="Сменить регион (Premium)">🇷🇺 RU</span>
+    <button class="icon-btn" id="refreshTop" type="button" title="Проверить цены сейчас">⟳</button>
+  </div>
+</header>
+
+<!-- ===== контент ===== -->
+<main class="content">
+
+  <!-- 🎮 ИГРЫ -->
+  <section class="view" id="view-games">
+    <div class="view-head">
+      <div>
+        <h1 class="view-title">Мои игры</h1>
+        <p class="view-sub" id="gamesSub">отслеживание скидок</p>
+      </div>
+      <button class="btn btn-primary" id="addGameOpen" type="button">＋ Добавить</button>
+    </div>
+
+    <div class="wallet hidden" id="walletHero"></div>
+
+    <!-- 🎭 виральная фича: «какая игра — твоя» по фото (анализ на устройстве) -->
+    <div class="fun-card" id="funCard">
+      <div class="fun-emoji">🎭</div>
+      <div class="fun-body">
+        <div class="fun-title">Какая игра — твоя?</div>
+        <div class="fun-sub">загрузи селфи — подберём матч из популярных игр. Фото анализируется прямо на устройстве и никуда не уходит</div>
+      </div>
+      <button class="btn btn-primary btn-sm" id="funOpen" type="button">Погнали</button>
+    </div>
+
+    <div class="search-panel hidden" id="searchPanel">
+      <input type="search" id="searchInput" placeholder="Название игры (мин. 2 символа)…"
+             autocomplete="off" autocapitalize="off" spellcheck="false">
+      <div class="search-meta hidden" id="searchHint">Совет: можно вставить ссылку на Steam или ID игры.</div>
+      <ul class="search-results" id="searchResults"></ul>
+    </div>
+
+    <div class="featured-strip hidden" id="featuredStrip"></div>
+
+    <ul class="game-list" id="gameList"></ul>
+
+    <div class="state-box hidden" id="gamesEmpty">
+      <div class="empty-emoji">🎮</div>
+      <p>Список пуст</p>
+      <p class="muted">Добавьте игру — или импортируйте весь вишлист Steam одной кнопкой.</p>
+      <div class="state-actions">
+        <button class="btn btn-primary" id="emptyAddBtn" type="button">＋ Найти игру</button>
+        <button class="btn btn-ghost" id="emptyWishBtn" type="button">⭐ Импорт вишлиста</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 🔥 СДЕЛКИ -->
+  <section class="view hidden" id="view-deals">
+    <div class="view-head">
+      <div>
+        <h1 class="view-title">Сделки</h1>
+        <p class="view-sub" id="dealsSub">живые скидки сейчас</p>
+      </div>
+    </div>
+
+    <div class="seasonal hidden" id="seasonalBanner">
+      <div class="seasonal-text">
+        <b>🔥 Похоже, началась крупная распродажа Steam</b>
+        <span>Скидка сразу у заметной доли вашего списка. Самое время проверить!</span>
+      </div>
+    </div>
+
+    <div class="segmented" id="dealsSeg">
+      <button class="seg active" data-seg="mine" type="button">Ваши скидки</button>
+      <button class="seg" data-seg="global" type="button">Глобально в Steam</button>
+    </div>
+
+    <div id="dealsMine"></div>
+    <div id="dealsGlobal" class="hidden"></div>
+  </section>
+
+  <!-- 📈 РЫНОК -->
+  <section class="view hidden" id="view-market">
+    <div class="view-head">
+      <div>
+        <h1 class="view-title">Рынок</h1>
+        <p class="view-sub">обзор · ценовой компас · живые алерты</p>
+      </div>
+    </div>
+
+    <!-- 1) 🗺 Обзор рынка Steam -->
+    <div class="ov-block" id="marketOvBlock">
+      <div class="ov-label">
+        <span>🗺 Обзор рынка Steam</span>
+        <button class="ov-refresh" id="marketOvRefresh" type="button" title="Обновить">⟳</button>
+      </div>
+      <div class="ov-wave hidden" id="marketOvWave"></div>
+      <div class="ov-tabs" id="marketOvTabs"></div>
+      <div class="ov-note">Топ-10 по числу активных лотов на продаже. Цена «купить сейчас», пересчёт в валюту региона по курсу Steam. Клик по предмету — ценовой компас и алерт.</div>
+      <div id="marketOvRows"></div>
+    </div>
+
+    <!-- 2) 🧭 Ценовой компас + постановка алерта -->
+    <div class="section-label" id="marketCompassLabel">🧭 Ценовой компас</div>
+    <div class="m-addbar">
+      <button class="btn btn-primary" id="marketAddOpen" type="button">＋ Алерт / компас</button>
+      <span class="m-addbar-hint" id="marketChipsHint"></span>
+    </div>
+    <div class="search-panel hidden" id="marketAddPanel">
+      <label class="field-label">Название предмета или ссылка</label>
+      <div class="m-input-wrap">
+        <input type="text" id="marketInput" placeholder="напр. Fracture Case, AK-47 | Redline…"
+               autocomplete="off" autocapitalize="off" spellcheck="false">
+        <div class="m-suggest hidden" id="marketSuggest"></div>
+      </div>
+      <div class="chips" id="marketChips"></div>
+      <div id="marketLookupResult"></div>
+      <div class="alert-form hidden" id="alertForm">
+        <div class="form-row">
+          <span class="field-label">Направление</span>
+          <div class="threshold-row">
+            <div class="segmented segmented-sm" id="dirSeg">
+              <button class="seg active" data-dir="below" type="button">📉 ниже</button>
+              <button class="seg" data-dir="above" type="button">📈 выше</button>
+            </div>
+          </div>
+        </div>
+        <div class="form-row">
+          <span class="field-label">Цель</span>
+          <div class="threshold-row">
+            <div class="segmented segmented-sm" id="goalSeg">
+              <button class="seg active" data-mode="price" type="button">по цене ₽</button>
+              <button class="seg" data-mode="percent" type="button">% от текущей</button>
+            </div>
+          </div>
+        </div>
+        <div class="form-row">
+          <input type="number" id="alertAmount" placeholder="Цена-цель, ₽" min="1" inputmode="decimal">
+          <button class="btn btn-primary" id="marketCreateBtn" type="button">Поставить алерт</button>
+        </div>
+        <p class="search-meta" id="alertGoalHint">Сработает один раз — как «лимитная заявка» у трейдеров.</p>
+      </div>
+    </div>
+
+    <!-- 3) 📡 Активные алерты -->
+    <div class="premium-gate hidden" id="marketGate"></div>
+    <div class="section-label hidden" id="marketListLabel">📡 Активные алерты<span class="mlive" id="marketLiveDot"></span></div>
+    <ul class="alert-list" id="marketAlerts"></ul>
+    <div class="state-box hidden" id="marketEmpty">
+      <div class="empty-emoji">📈</div>
+      <p>Алертов пока нет</p>
+      <p class="muted">Следите за скинами, кейсами и карточками: цена пересекла цель — пришлём уведомление и снимем алерт.</p>
+    </div>
+  </section>
+
+  <!-- 🔔 ЛЕНТА -->
+  <section class="view hidden" id="view-feed">
+    <div class="view-head">
+      <div>
+        <h1 class="view-title">Лента</h1>
+        <p class="view-sub">что прислал бы вам бот в Telegram</p>
+      </div>
+    </div>
+    <div id="feedList"></div>
+    <div class="state-box hidden" id="feedEmpty">
+      <div class="empty-emoji">🔕</div>
+      <p>Пока тихо</p>
+      <p class="muted">Как только у кого-то из вашего списка появится скидка — событие появится здесь (и ушло бы пушем в Telegram).</p>
+    </div>
+  </section>
+
+  <!-- 👤 ПРОФИЛЬ -->
+  <section class="view hidden" id="view-profile">
+    <div class="profile-card" id="premiumCard">
+      <div class="pc-top">
+        <div class="pc-badge" id="pcBadge">💎 PREMIUM</div>
+        <div class="pc-user">Демо-пользователь <span class="muted" id="pcTrialInfo"></span></div>
+      </div>
+      <div class="pc-big" id="pcBig">до 21 сентября</div>
+      <div class="pc-actions" id="pcActions"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Статистика</div>
+      <div class="stat-grid" id="statGrid"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Настройки</div>
+
+      <div class="setting">
+        <div class="set-top">
+          <div><b>Регион цен</b><div class="muted">валюта и магазин Steam</div></div>
+          <span class="pill" id="regionChip">🇷🇺 RU</span>
+        </div>
+        <div class="segmented" id="regionSeg">
+          <button class="seg" data-region="ru" type="button">🇷🇺 ₽</button>
+          <button class="seg" data-region="us" type="button">🇺🇸 $</button>
+          <button class="seg" data-region="de" type="button">🇪🇺 €</button>
+        </div>
+      </div>
+
+      <div class="setting">
+        <div class="set-top">
+          <div><b>Не уведомлять о скидках меньше</b><div class="muted">порог, чтобы не спамить мелочью</div></div>
+          <span class="pill pill-accent" id="thresholdPill">0%</span>
+        </div>
+        <input type="range" id="thresholdRange" min="0" max="90" step="5" value="0">
+      </div>
+
+      <div class="setting setting-toggle" id="digestRow">
+        <div>
+          <b>Дайджест скидок</b>
+          <div class="muted">сводка топ-скидок + сезонный баннер</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="digestToggle" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="setting setting-toggle" id="pushRow">
+        <div>
+          <b>🔔 Пуш-уведомления</b>
+          <div class="muted" id="pushHint">баннер сверху, когда алерт сработал или появилась скидка</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="pushToggle" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+      <button class="btn btn-block btn-ghost hidden" id="pushPermBtn" type="button">🔔 Разрешить системные уведомления</button>
+
+      <div class="setting">
+        <div class="set-top">
+          <div><b>Тема</b><div class="muted">оформление приложения</div></div>
+          <span class="pill" id="themeChip">🌙 Тёмная</span>
+        </div>
+        <div class="segmented" id="themeSeg" style="margin-top:10px">
+          <button class="seg" data-theme-val="dark" type="button">🌙 Тёмная</button>
+          <button class="seg" data-theme-val="light" type="button">☀️ Светлая</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Рост</div>
+      <button class="btn btn-block btn-ghost" id="wishImportBtn" type="button">⭐ Импортировать вишлист Steam</button>
+      <div id="wishResult" class="search-meta"></div>
+      <button class="btn btn-block btn-ghost" id="referralBtn" type="button">👥 Пригласить друга — +7 дней Premium</button>
+    </div>
+
+    <div class="card about-card">
+      <div class="card-title">О приложении</div>
+      <p class="muted small">Прототип мини-аппки для SteamSale-бота. Работает в демо-режиме: без своей БД
+      и Telegram — но все цены, скидки, поиск и Market берутся живыми из Steam. Полная карта
+      «демо → реальный бот» — в <code>webapp/README.md</code>.</p>
+    </div>
+  </section>
+</main>
+
+<!-- ===== нижняя навигация ===== -->
+<nav class="tabbar">
+  <button class="tab-btn active" data-tab="games" type="button"><span class="tab-emoji">🎮</span><span>Игры</span></button>
+  <button class="tab-btn" data-tab="deals" type="button"><span class="tab-emoji">🔥</span><span>Сделки</span></button>
+  <button class="tab-btn" data-tab="market" type="button"><span class="tab-emoji">📈</span><span>Рынок</span></button>
+  <button class="tab-btn" data-tab="feed" type="button"><span class="tab-emoji">🔔</span><span>Лента</span><i class="badge-dot hidden" id="feedBadge"></i></button>
+  <button class="tab-btn" data-tab="profile" type="button"><span class="tab-emoji">👤</span><span>Профиль</span></button>
+</nav>
+
+<!-- ===== оверлей: детали игры ===== -->
+<div class="sheet-backdrop hidden" id="sheetBackdrop"></div>
+<div class="sheet hidden" id="sheet">
+  <div class="sheet-handle"></div>
+  <div class="sheet-close" id="sheetClose">✕</div>
+  <div id="sheetBody"></div>
+</div>
+
+<!-- ===== тост ===== -->
+<div class="toast hidden" id="toast"></div>
+
+<!-- ===== корень оверлея «твоя игра» (заполняется JS) ===== -->
+<div id="faceRoot"></div>
+
+<!-- ===== пуш-баннеры (сверху, в стиле системных уведомлений) ===== -->
+<div class="push-layer" id="pushLayer" aria-live="polite"></div>
+
+<!-- ===== нет соединения с сервером ===== -->
+<div class="net-overlay hidden" id="netOverlay">
+  <div class="net-box">
+    <div class="net-emoji">📡</div>
+    <div class="net-title">Нет соединения с сервером</div>
+    <div class="net-text">Данные берутся живыми из Steam — нужен запущенный сервер (LIVE PREVIEW), а не
+    предпросмотр файла. Проверьте, что превью приложения открыто, и нажмите «Повторить».</div>
+    <button class="btn btn-primary" id="netRetry" type="button">⟳ Повторить</button>
+  </div>
+</div>
+
+<script src="app.js?v=23"></script>
+</body>
+</html>

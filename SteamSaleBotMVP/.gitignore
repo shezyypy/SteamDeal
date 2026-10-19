@@ -1,0 +1,12 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+backups/
+.idea/
+*.log
+*.sql.gz
+backups/*.sql
+webapp/data/*.json

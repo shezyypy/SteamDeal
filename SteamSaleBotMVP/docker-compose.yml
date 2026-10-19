@@ -1,0 +1,53 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: steam_bot
+      POSTGRES_PASSWORD: change_me   # смени перед запуском, и в .env DATABASE_URL подставь тот же пароль
+      POSTGRES_DB: steam_sale_bot
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+  bot:
+    build: .
+    command: python main.py
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      - postgres
+      - redis
+
+  worker:
+    build: .
+    command: python worker.py
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      - postgres
+      - redis
+
+  webapp:
+    build: .
+    command: python webapp/server.py
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      WEBAPP_HOST: 0.0.0.0
+    ports:
+      - "8787:8787"
+    depends_on:
+      - postgres
+
+volumes:
+  postgres_data:

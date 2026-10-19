@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SteamSale · демо-админка</title>
+<style>
+:root{
+  --bg0:#070b12; --bg1:#0b1320; --card:#101b2c; --card2:#15233f;
+  --line:rgba(126,165,255,.12); --text:#eef3fb; --muted:#8296ad; --faint:#5c7086;
+  --accent:#4ea1ff; --violet:#8b5cf6; --good:#39d98a; --warn:#ffb454; --danger:#ff5c7a;
+  --grad:linear-gradient(135deg,#4ea1ff,#8b5cf6);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg0);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;padding:16px 0 60px}
+.wrap{max-width:760px;margin:0 auto;padding:0 14px}
+.top{display:flex;align-items:center;gap:10px;padding:6px 0 18px}
+.logo{width:34px;height:34px;border-radius:11px;display:grid;place-items:center;background:var(--grad);
+  box-shadow:0 4px 14px rgba(78,161,255,.35)}
+h1{font-size:19px;font-weight:900}
+.sub{color:var(--muted);font-size:12px}
+.sp{flex:1}
+.card{background:linear-gradient(180deg,rgba(18,30,48,.9),rgba(13,22,37,.9));border:1px solid var(--line);
+  border-radius:16px;padding:14px;margin:0 0 14px}
+.card h2{font-size:11px;text-transform:uppercase;letter-spacing:.7px;color:var(--muted);margin-bottom:10px;font-weight:800}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+.stat{background:rgba(7,11,18,.5);border:1px solid var(--line);border-radius:12px;padding:9px 11px}
+.stat i{display:block;font-style:normal;font-size:10px;color:var(--faint);font-weight:700;text-transform:uppercase;letter-spacing:.4px}
+.stat b{font-size:15px}
+.stat small{color:var(--muted)}
+.ok{color:var(--good)} .bad{color:var(--danger)} .warn{color:var(--warn)} .accent{color:var(--accent)}
+table{width:100%;border-collapse:collapse;font-size:12px}
+td,th{text-align:left;padding:5px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--faint);font-size:10px;text-transform:uppercase;letter-spacing:.4px}
+button{font:inherit;cursor:pointer;border:none;border-radius:11px;padding:9px 13px;font-weight:700;font-size:13px}
+.btn{background:var(--grad);color:#fff}
+.btn-ghost{background:rgba(126,165,255,.08);color:var(--text);border:1px solid var(--line)}
+.btn-danger{background:rgba(255,92,122,.15);color:var(--danger)}
+.btn-violet{background:linear-gradient(135deg,rgba(139,92,246,.5),rgba(78,161,255,.4));color:#fff}
+.btn:disabled{opacity:.5;cursor:default}
+input,textarea{font:inherit;background:var(--bg1);border:1px solid var(--line);color:var(--text);
+  border-radius:11px;padding:10px 12px;width:100%;margin:6px 0 10px}
+textarea{min-height:64px;resize:vertical}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+pre{background:rgba(7,11,18,.6);border:1px solid var(--line);border-radius:12px;padding:10px;
+  font-size:11px;line-height:1.5;max-height:260px;overflow:auto;color:#b9c9dd;white-space:pre-wrap}
+.logo-pill{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:800;padding:4px 10px;border-radius:99px}
+.live{color:var(--good);background:rgba(57,217,138,.12);border:1px solid rgba(57,217,138,.3)}
+.stale{color:var(--danger);background:rgba(255,92,122,.12);border:1px solid rgba(255,92,122,.3)}
+.muted{color:var(--muted)} .small{font-size:11.5px}
+.hidden{display:none!important}
+.login-card{max-width:380px;margin:12vh auto;text-align:center}
+.login-card .card{text-align:left}
+#msg{font-size:12.5px;min-height:16px;margin:4px 0 8px}
+hr{border:none;border-top:1px solid var(--line);margin:10px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="logo">🛠</div>
+    <div><h1>SteamSale · демо-админка</h1>
+      <div class="sub">внутренний пульт мини-аппки: воркер, кэши, Premium, рассылка</div></div>
+    <div class="sp"></div>
+    <button class="btn-ghost hidden" id="logoutBtn" type="button">Выйти</button>
+  </div>
+
+  <!-- вход по коду -->
+  <div class="login-card" id="loginCard">
+    <div class="card">
+      <h2>Доступ по коду</h2>
+      <input id="codeIn" type="password" placeholder="Код доступа (ADMIN_CODE)" autocomplete="off">
+      <button class="btn" id="loginBtn" style="width:100%" type="button">Войти</button>
+      <div class="small muted" style="margin-top:10px;line-height:1.5">Код задаётся в окружении сервера (<code>ADMIN_CODE</code>).
+      Можно сразу открыть <span class="accent">/admin?code=…</span></div>
+    </div>
+  </div>
+
+  <div id="panel" class="hidden">
+
+    <div class="card">
+      <h2>Сервер · воркер (heartbeat)</h2>
+      <div class="grid" id="srvGrid"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn-violet" id="cycleBtn" type="button">⟳ Прогнать цикл сейчас</button>
+        <button class="btn-ghost" id="refreshBtn" type="button">Обновить состояние</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Steam · живые источники</h2>
+      <table id="steamTbl"></table>
+    </div>
+
+    <div class="card">
+      <h2>Пользователь · Premium</h2>
+      <div class="grid" id="storeGrid"></div>
+      <hr>
+      <div class="row">
+        <span class="small muted">Выдать Premium на:</span>
+        <button class="btn-violet" data-days="7" type="button">7 дн</button>
+        <button class="btn-violet" data-days="30" type="button">30 дн</button>
+        <button class="btn-violet" data-days="365" type="button">1 год</button>
+        <input id="daysIn" type="number" value="30" min="1" max="3650" style="width:110px">
+        <button class="btn" id="grantBtn" type="button">Выдать</button>
+        <button class="btn-danger" id="revokeBtn" type="button">Отозвать</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Рассылка (лента уведомлений)</h2>
+      <textarea id="anText" placeholder="Текст объявления — попадёт в «Ленту», как событие от бота…"></textarea>
+      <button class="btn" id="announceBtn" type="button">📢 Отправить в ленту</button>
+      <div class="small muted" style="margin-top:8px" id="anMsg"></div>
+    </div>
+
+    <div class="card">
+      <h2>Кэши · каталог распродаж</h2>
+      <table id="cacheTbl"></table>
+    </div>
+
+    <div class="card">
+      <h2>Логи сервера (хвост)</h2>
+      <pre id="logPre">…</pre>
+    </div>
+
+    <div class="card" style="border-color:rgba(255,92,122,.35)">
+      <h2 style="color:var(--danger)">Опасная зона</h2>
+      <p class="small muted" style="margin-bottom:10px">Полный сброс демо-состояния: игры, алерты, события, история цен — к «чистому» виду при первом запуске.</p>
+      <button class="btn-danger" id="resetBtn" type="button">♻ Сбросить состояние демо</button>
+    </div>
+
+  </div>
+  <div id="msg"></div>
+</div>
+
+<script>
+const $=s=>document.querySelector(s);
+const codeParam = new URLSearchParams(location.search).get("code") || "";
+let timer=null;
+
+async function j(method,url,body){
+  const r=await fetch(url,{method,
+    headers:{"Content-Type":"application/json","X-Admin-Code":codeParam||""},
+    body:body?JSON.stringify(body):undefined});
+  let d=null;try{d=await r.json()}catch(e){}
+  if(r.status===403){showLogin();throw new Error((d&&d.message)||"нет доступа")}
+  if(!d) throw new Error("пустой ответ");
+  return d;
+}
+function fmtAge(s){if(s==null)return "—";if(s<60)return s.toFixed(0)+" с";
+  if(s<3600)return (s/60).toFixed(1)+" мин";return (s/3600).toFixed(2)+" ч";}
+function esc(x){return String(x??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
+function ts(t){if(!t)return "—";return new Date(t*1000).toLocaleTimeString("ru-RU")}
+function badge(v){return `<span class="logo-pill ${v?"live":"stale"}">${v?"● в сети":"✖ недоступен"}</span>`}
+
+function showLogin(){clearInterval(timer);timer=null;$("#panel").classList.add("hidden");
+  $("#loginCard").classList.remove("hidden");$("#logoutBtn").classList.add("hidden");$("#msg").textContent="";}
+function showPanel(){clearInterval(timer);$("#loginCard").classList.add("hidden");
+  $("#panel").classList.remove("hidden");$("#logoutBtn").classList.remove("hidden");load();timer=setInterval(load,8000);}
+
+async function tryLogin(code){
+  try{await j("POST","/api/admin/login",{code});showPanel();}
+  catch(e){$("#msg").textContent="✖ "+e.message;}}
+
+$("#loginBtn").onclick=()=>tryLogin($("#codeIn").value.trim());
+$("#codeIn").addEventListener("keydown",e=>{if(e.key==="Enter")tryLogin($("#codeIn").value.trim())});
+$("#logoutBtn").onclick=async()=>{await j("POST","/api/admin/logout",{});showLogin();};
+$("#refreshBtn").onclick=load;
+$("#cycleBtn").onclick=async()=>{const b=$("#cycleBtn");b.disabled=true;b.textContent="работаю…";
+  try{const d=await j("POST","/api/admin/cycle",{});if(d.locked)$("#msg").textContent="цикл уже шёл в фоне";
+    else $("#msg").textContent="цикл прошёл: игр "+d.cycle.games_checked+", алертов "+d.cycle.market_checked+", событий "+d.cycle.new_events;}
+  catch(e){$("#msg").textContent="✖ "+e.message}b.disabled=false;b.textContent="⟳ Прогнать цикл сейчас";load();};
+
+$$days=()=>parseInt($("#daysIn").value||"0",10);
+document.querySelectorAll("[data-days]").forEach(b=>b.onclick=()=>{$("#daysIn").value=b.dataset.days;grant(b.dataset.days);});
+$("#grantBtn").onclick=()=>grant($$days());
+async function grant(days){
+  if(!days||days<=0)return $("#msg").textContent="укажите число дней";
+  const d=await j("POST","/api/admin/premium",{days});
+  $("#msg").textContent="💎 Premium выдан: осталось "+d.premium_days_left+" дн. (до "+esc(d.premium_until?.slice(0,10))+" )";load();}
+$("#revokeBtn").onclick=async()=>{await j("POST","/api/admin/revoke",{});$("#msg").textContent="Premium отозван";load();};
+$("#announceBtn").onclick=async()=>{const t=$("#anText").value.trim();
+  if(!t)return $("#anMsg").textContent="введите текст";
+  await j("POST","/api/admin/announce",{text:t});$("#anText").value="";$("#anMsg").textContent="✅ отправлено в ленту";load();};
+$("#resetBtn").onclick=async()=>{
+  if(!confirm("Точно сбросить всё демо-состояние?"))return;
+  const d=await j("POST","/api/admin/reset",{});$("#msg").textContent="♻ "+d.message;load();};
+
+async function load(){
+  try{
+    const d=await j("GET","/api/admin/state");
+    renderServer(d);renderSteam(d);renderStore(d);renderCaches(d);
+    $("#logPre").textContent=(d.logs_tail||[]).join("\n")||"(лог пуст)";
+    $("#msg").textContent="";refreshBtnTitle(d);
+  }catch(e){$("#msg").textContent="✖ "+e.message;}
+}
+function refreshBtnTitle(d){const s=d&&d.worker?d.worker.cycle_age_s:null;
+  $("#refreshBtn").textContent="Обновить · цикл был "+fmtAge(s)+" назад";}
+
+function renderServer(d){
+  const w=d.worker||{},srv=d.server||{};
+  const last=w.last_cycle||{};
+  $("#srvGrid").innerHTML=`
+   <div class="stat"><i>воркер</i>${w.alive?`<span class="ok">● живой</span>`:`<span class="bad">✖ умер</span>`}<br><small>цикл ${fmtAge(w.cycle_age_s)} назад</small></div>
+   <div class="stat"><i>последний цикл</i><b>${last.games_checked??"—"} игр</b><br><small>алертов ${last.market_checked??"—"} · сработало ${last.market_triggered??"—"}</small></div>
+   <div class="stat"><i>аптайм сервера</i><b>${fmtAge(srv.uptime_s)}</b><br><small>старт ${esc(srv.started_iso)} UTC</small></div>
+   <div class="stat"><i>цикл в работе</i><b>${w.locked?"да":"нет"}</b><br><small>порт ${srv.port}</small></div>`;
+}
+function renderSteam(d){
+  const m=d.steam.market||{},dl=d.steam.deals||{};
+  const mk=(x)=>`<span class="logo-pill ${x.ok||x.at?"live":"stale"}">последний контакт ${ts(x.at)}</span>
+     <span class="small muted">успешно ${x.ok} · пусто/429 ${x.empty}</span>`;
+  $("#steamTbl").innerHTML=`<tr><th>источник</th><th>статус</th></tr>
+    <tr><td>Market (ценовые алерты, обзор)</td><td>${mk(m)}</td></tr>
+    <tr><td>Распродажи (special+поиск, каталог)</td><td>${mk(dl)}</td></tr>`;
+}
+function renderStore(d){
+  const s=d.store||{};
+  const p=s.premium;
+  $("#storeGrid").innerHTML=`
+   <div class="stat"><i>premium</i>${p?`<span class="ok">💎 активен</span>`:`<span class="bad">выключен</span>`}<br><small>осталось ${s.premium_days_left} дн.</small></div>
+   <div class="stat"><i>пользователь</i><b>${esc(s.user_name)}</b><br><small>регион ${esc(s.region||"—")} · ${s.trial_available?"триал доступен":"триал использован"}</small></div>
+   <div class="stat"><i>игры в списке</i><b>${s.games}</b><br><small>лимит бесплатно 3</small></div>
+   <div class="stat"><i>market-алерты</i><b>${s.alerts}</b></div>
+   <div class="stat"><i>события ленты</i><b>${s.events_total}</b><br><small>непрочитанных ${s.events_unread}</small></div>`;
+}
+function renderCaches(d){
+  const c=d.caches||{};
+  const mp=c.market_price||{},deals=c.deals||{},fx=c.fx||{};
+  const ovRows=Object.entries(c.overview||{}).map(([g,v])=>`<tr><td>overview · ${esc(g)}</td><td>кэш ${fmtAge(v.age_s)} · строк ${v.rows}</td></tr>`).join("");
+  const catRows=Object.entries(c.catalog||{}).map(([cc,v])=>`<tr><td>каталог распродаж · ${esc(cc)}</td><td>всего ${v.total_all??"—"} · листаемых ${v.effective??"—"} (скрыто ${v.hidden??"—"})</td></tr>`).join("");
+  $("#cacheTbl").innerHTML=`<tr><th>кэш</th><th>состояние</th></tr>
+   <tr><td>цены Market (для тиков алертов)</td><td>${mp.items??0} предметов · возраст ${fmtAge(mp.age_s)}</td></tr>
+   <tr><td>фид глобальных сделок</td><td>${deals.items??0} игр · возраст ${fmtAge(deals.age_s)}${deals.stale?' · <span class="bad">stale (Steam молчит)</span>':""}</td></tr>
+   <tr><td>курс пересчёта $→валюта</td><td>${fx.rate?`≈ ${fx.rate.toFixed(3)} ₽/цент · ${fmtAge(fx.age_s)} назад`:"ещё не получен"}</td></tr>
+   ${ovRows}${catRows}`;
+}
+
+(async()=>{ if(codeParam){try{await j("POST","/api/admin/login",{code:codeParam});}catch(e){}}
+  // проверка текущей сессии
+  try{await j("GET","/api/admin/state");showPanel();}catch(e){showLogin();}
+})();
+</script>
+</body>
+</html>

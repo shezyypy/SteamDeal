@@ -1,0 +1,1 @@
+"""SteamSale Telegram Mini App."""
